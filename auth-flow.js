@@ -7,7 +7,7 @@
     return result;
   };
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-  const panel = (title, message, body) => `<main class="login-screen"><section class="auth-card"><div class="auth-kicker">COACH SUTRA ACCOUNT</div><h1>${title}</h1><p>${message}</p>${body}<div class="auth-foot">Local prototype. Use the OTP shown here only while demo email delivery is unconfigured.</div></section></main>`;
+  const panel = (title, message, body) => `<main class="login-screen"><section class="auth-card"><div class="auth-kicker">MY JEE MENTOR ACCOUNT</div><h1>${title}</h1><p>${message}</p>${body}<div class="auth-foot">Local prototype. Use the OTP shown here only while demo email delivery is unconfigured.</div></section></main>`;
   const setError = message => { const slot = app.querySelector('[data-auth-error]'); if (slot) slot.textContent = message; };
   const busy = value => { const button = app.querySelector('[type=submit]'); if (button) button.disabled = value; };
   const demoNotice = (result) => result.demoMode && result.demoOtp ? `<p class="auth-demo-code" role="status">Demo mode: OTP shown here because email service is not connected. Code: <b>${esc(result.demoOtp)}</b>.</p>` : `<p class="auth-demo-code" role="status">If the email is registered, an OTP has been sent. It expires in 10 minutes.</p>`;

@@ -1,0 +1,1 @@
+Public application form, server JSON persistence, duplicate/rate/size validation, admin list/detail/filter/pagination UI, and protected status/notes API are implemented; admin access uses ADMISSIONS_ADMIN_PASSWORD. Next: browser verification; Playwright is not installed and direct Chromium launch is blocked in this environment.

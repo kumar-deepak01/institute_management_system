@@ -1,0 +1,13 @@
+{
+  "name": "coach-sutra",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "autopush": "node auto-push.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
