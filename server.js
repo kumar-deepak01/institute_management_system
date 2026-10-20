@@ -5,18 +5,13 @@ const fs = require('node:fs/promises');
 const fileStreams = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const ExcelJS = require('exceljs');
+const sheetsStore = require('./googleSheets');
 
 const root = __dirname;
-const storePath = path.join(root, '.local-auth-store.json');
-const legacyAdmissionsPath = path.join(root, '.local-admissions-store.json');
-const admissionsDirectory = path.join(root, 'data');
-const admissionsPath = path.join(admissionsDirectory, 'admissions.xlsx');
 const admissionPhotosPath = path.join(root, 'uploads', 'admissions');
 const requestedPort = Number(process.env.PORT || process.argv[2] || 3000);
 const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || 'https://institutemanagementsystem-lake.vercel.app').split(',').map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean));
 const initialPasswords = { student: 'JeemStudent@12345', parent: 'JeemParent@12345' };
-const sessions = new Map();
 const loginFailures = new Map();
 const otpChallenges = new Map();
 const otpRequests = new Map();
@@ -28,20 +23,19 @@ const admissionRequests = new Map();
 let admissionsQueue = Promise.resolve();
 
 const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString('base64url');
-const admissionAdminToken = randomToken();
+const sessionSecret = process.env.SESSION_SECRET || (process.env.VERCEL ? '' : randomToken(48));
+const admissionAdminToken = process.env.ADMISSIONS_ADMIN_TOKEN || (sessionSecret ? crypto.createHmac('sha256', sessionSecret).update('admissions-admin').digest('base64url') : randomToken());
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const passwordHash = (password, salt) => new Promise((resolve, reject) => crypto.pbkdf2(password, salt, 310000, 32, 'sha256', (error, key) => error ? reject(error) : resolve(key.toString('base64'))));
 const validPassword = value => value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
 const safeEqual = (a, b) => { const left = Buffer.from(String(a)); const right = Buffer.from(String(b)); return left.length === right.length && crypto.timingSafeEqual(left, right); };
 
 async function loadAccounts() {
-  try { const parsed = JSON.parse(await fs.readFile(storePath, 'utf8')); if (Array.isArray(parsed)) accounts = parsed; }
-  catch (error) { if (error.code !== 'ENOENT') console.error('Auth store could not be read.'); }
+  accounts = (await sheetsStore.getSheetRecords('Students')).filter(item => item._type === 'account');
 }
 async function saveAccounts(next) {
-  const temporary = `${storePath}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
-  await fs.rename(temporary, storePath);
+  const current = await sheetsStore.getSheetRecords('Students');
+  await sheetsStore.saveSheetRecords('Students', [...current.filter(item => item._type !== 'account'), ...next.map(item => ({ ...item, _type: 'account' }))]);
   accounts = next;
 }
 function json(res, status, value) {
@@ -67,89 +61,36 @@ async function body(req, maxSize = 64 * 1024) {
   for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > maxSize) throw new Error('Request too large'); }
   return input ? JSON.parse(input) : {};
 }
-const admissionHeaders = ['App No', 'Applied At', 'Status', 'Full Name', 'Gender', 'Date of Birth', 'Batch Id', 'Batch Name', 'Mobile', 'Email', 'Address', 'Photo File', 'Father Name', 'Mother Name', 'Guardian Phone', 'Previous School', 'Last Year %', 'Declaration Accepted At', 'Reject Reason', 'Admin Notes', 'Status History', 'Student Id'];
-const friendlyAdmissionsFileError = 'Admissions file is open in Excel. Close it and try again.';
-function withAdmissionsQueue(task) { const result = admissionsQueue.then(task, task); admissionsQueue = result.catch(() => {}); return result; }
-function workbookError(error) { return ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error?.code) ? friendlyAdmissionsFileError : 'Could not read or save admissions.xlsx. Please try again.'; }
-function isAdmissionsFileLocked(error) { return ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error?.code); }
-function newAdmissionsWorkbook() {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Admissions'); sheet.addRow(admissionHeaders); sheet.getRow(1).font = { bold: true };
-  const settings = workbook.addWorksheet('Settings'); settings.addRow(['Key', 'Value']); settings.getRow(1).font = { bold: true };
-  return workbook;
-}
-function parseHistory(value) { try { const parsed = JSON.parse(String(value || '[]')); return Array.isArray(parsed) ? parsed : []; } catch { return []; } }
-function excelText(value) { return value && typeof value === 'object' && 'text' in value ? String(value.text) : String(value ?? ''); }
-function rowApplication(row) {
-  const rawPercent = row.getCell(17).value;
-  const appNo = excelText(row.getCell(1).value);
-  const studentId = excelText(row.getCell(22).value);
-  return { id: appNo, applicationNo: appNo, appliedAt: excelText(row.getCell(2).value), status: excelText(row.getCell(3).value) || 'Pending', name: excelText(row.getCell(4).value), gender: excelText(row.getCell(5).value), dateOfBirth: excelText(row.getCell(6).value), batchId: excelText(row.getCell(7).value), batchName: excelText(row.getCell(8).value), mobile: excelText(row.getCell(9).value), email: excelText(row.getCell(10).value), address: excelText(row.getCell(11).value), photoFile: excelText(row.getCell(12).value), fatherName: excelText(row.getCell(13).value), motherName: excelText(row.getCell(14).value), guardianPhone: excelText(row.getCell(15).value), previousSchool: excelText(row.getCell(16).value), previousYearPercent: rawPercent === null || rawPercent === undefined || rawPercent === '' ? '' : Number(rawPercent), declaration: true, declarationAcceptedAt: excelText(row.getCell(18).value), rejectReason: excelText(row.getCell(19).value), adminNotes: excelText(row.getCell(20).value), statusHistory: parseHistory(row.getCell(21).value), ...(studentId ? { student: { id: studentId } } : {}) };
-}
-function applicationRow(item) { return [item.applicationNo, item.appliedAt, item.status, item.name, item.gender, item.dateOfBirth, item.batchId, item.batchName, item.mobile, item.email, item.address, item.photoFile || '', item.fatherName, item.motherName, item.guardianPhone, item.previousSchool, item.previousYearPercent === '' ? '' : Number(item.previousYearPercent), item.declarationAcceptedAt, item.rejectReason || '', item.adminNotes || '', JSON.stringify(item.statusHistory || []), item.student?.id || item.studentId || '']; }
-function saveApplicationRow(sheet, rowNumber, item) { applicationRow(item).forEach((value, index) => { sheet.getRow(rowNumber).getCell(index + 1).value = value; }); }
-function workbookSettings(workbook) {
-  const sheet = workbook.getWorksheet('Settings'); if (!sheet) return admissionConfig;
-  const saved = {};
-  sheet.eachRow((row, rowNumber) => { if (rowNumber > 1) saved[excelText(row.getCell(1).value)] = excelText(row.getCell(2).value); });
-  try { if (saved.batches) admissionConfig.batches = JSON.parse(saved.batches); } catch { /* Use current batch defaults. */ }
-  admissionConfig = { ...admissionConfig, open: saved.open === undefined ? admissionConfig.open : saved.open === 'true', instituteName: saved.instituteName || admissionConfig.instituteName, academicYear: saved.academicYear || admissionConfig.academicYear };
+const admissionConfigId = 'admission-config';
+async function loadAdmissionConfig() {
+  const batches = await sheetsStore.getSheetRecords('Batches');
+  const saved = batches.find(item => item.id === admissionConfigId);
+  if (saved) admissionConfig = { ...admissionConfig, ...saved.config };
+  const configuredBatches = batches.filter(item => item._type === 'admission-batch').map(({ id, name, course, active }) => ({ id, name, course: course || '', active: active !== false }));
+  if (configuredBatches.length) admissionConfig.batches = configuredBatches;
   return admissionConfig;
 }
-function saveWorkbookSettings(workbook, config) {
-  const sheet = workbook.getWorksheet('Settings') || workbook.addWorksheet('Settings');
-  sheet.spliceRows(1, sheet.rowCount); sheet.addRow(['Key', 'Value']);
-  for (const [key, value] of Object.entries({ open: String(config.open), instituteName: config.instituteName, academicYear: config.academicYear, batches: JSON.stringify(config.batches) })) sheet.addRow([key, value]);
+async function saveAdmissionConfig(config) {
+  admissionConfig = config;
+  const current = await sheetsStore.getSheetRecords('Batches');
+  const batches = config.batches.map(item => ({ ...item, _type: 'admission-batch' }));
+  await sheetsStore.saveSheetRecords('Batches', [...current.filter(item => item._type !== 'admission-batch' && item._type !== 'config'), { id: admissionConfigId, _type: 'config', config: { open: config.open, instituteName: config.instituteName, academicYear: config.academicYear } }, ...batches]);
 }
-async function readAdmissionsWorkbook() { const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(admissionsPath); return workbook; }
-async function writeAdmissionsWorkbook(workbook) {
-  const temporary = `${admissionsPath}.tmp`;
-  try { await workbook.xlsx.writeFile(temporary); await fs.rename(temporary, admissionsPath); }
-  catch (error) { try { await fs.rm(temporary, { force: true }); } catch { /* Preserve the existing workbook. */ } throw error; }
-}
-async function readApplications(workbook, includePhotos = false) {
-  const sheet = workbook.getWorksheet('Admissions'); if (!sheet) throw new Error('Admissions worksheet is missing.');
-  const items = [];
-  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    const row = sheet.getRow(rowNumber); if (!excelText(row.getCell(1).value)) continue;
-    const item = rowApplication(row);
-    if (includePhotos && item.photoFile) {
-      try { const photo = await fs.readFile(path.join(admissionPhotosPath, path.basename(item.photoFile))); const extension = path.extname(item.photoFile).slice(1); const mime = extension === 'jpg' ? 'jpeg' : extension; item.photo = `data:image/${mime};base64,${photo.toString('base64')}`; }
+async function listApplications(includePhotos = false) {
+  const records = (await sheetsStore.getSheetRecords('Admissions')).filter(item => item._type !== 'config');
+  if (includePhotos) {
+    for (const item of records) if (item.photoFile) {
+      try { const photo = await fs.readFile(path.join(admissionPhotosPath, path.basename(item.photoFile))); const ext = path.extname(item.photoFile).slice(1); item.photo = `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${photo.toString('base64')}`; }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    items.push(item);
   }
-  return items;
+  return records;
 }
-async function migrateLegacyAdmissions(workbook) {
-  let legacy;
-  try { legacy = JSON.parse(await fs.readFile(legacyAdmissionsPath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') console.error('Legacy admissions data could not be read.'); return; }
-  if (!legacy || typeof legacy !== 'object') return;
-  admissionConfig = { ...admissionConfig, open: legacy.institute?.open !== false, instituteName: cleanText(legacy.institute?.name || admissionConfig.instituteName, 160), academicYear: cleanText(legacy.academicYear || admissionConfig.academicYear, 30), batches: Array.isArray(legacy.batches) ? legacy.batches : admissionConfig.batches };
-  const sheet = workbook.getWorksheet('Admissions');
-  for (const [index, old] of (Array.isArray(legacy.applications) ? legacy.applications : []).entries()) {
-    const appNo = cleanText(old.applicationNo || `APP-${new Date().getFullYear()}-${String(index + 1).padStart(5, '0')}`, 40);
-    let photoFile = '';
-    if (typeof old.photo === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(old.photo)) {
-      const extension = old.photo.startsWith('data:image/png;') ? 'png' : old.photo.startsWith('data:image/webp;') ? 'webp' : 'jpg';
-      photoFile = `${appNo}.${extension}`; await fs.mkdir(admissionPhotosPath, { recursive: true }); await fs.writeFile(path.join(admissionPhotosPath, photoFile), Buffer.from(old.photo.split(',')[1], 'base64'));
-    }
-    const migrated = { ...old, id: appNo, applicationNo: appNo, appliedAt: old.appliedAt || new Date().toISOString(), status: old.status || 'Pending', photoFile, studentId: old.student?.id || old.studentId || '' };
-    saveApplicationRow(sheet, sheet.rowCount + 1, migrated);
-  }
-  saveWorkbookSettings(workbook, admissionConfig);
-}
-async function loadAdmissions() {
-  await fs.mkdir(admissionsDirectory, { recursive: true }); await fs.mkdir(admissionPhotosPath, { recursive: true });
-  let workbook;
-  try { workbook = await readAdmissionsWorkbook(); }
-  catch (error) {
-    if (isAdmissionsFileLocked(error)) { console.error(friendlyAdmissionsFileError); return; }
-    if (error.code !== 'ENOENT' && !String(error.message).startsWith('File not found:')) throw new Error(workbookError(error));
-    workbook = newAdmissionsWorkbook(); await migrateLegacyAdmissions(workbook); saveWorkbookSettings(workbook, admissionConfig); await writeAdmissionsWorkbook(workbook);
-  }
-  if (!workbook.getWorksheet('Admissions')) { const sheet = workbook.addWorksheet('Admissions'); sheet.addRow(admissionHeaders); await writeAdmissionsWorkbook(workbook); }
-  workbookSettings(workbook);
+async function saveApplication(item) {
+  const records = await sheetsStore.getSheetRecords('Admissions');
+  const index = records.findIndex(record => record.id === item.applicationNo);
+  if (index < 0) records.push({ ...item, id: item.applicationNo }); else records[index] = { ...item, id: item.applicationNo };
+  await sheetsStore.saveSheetRecords('Admissions', records);
 }
 const cleanText = (value, limit = 500) => String(value ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').trim().slice(0, limit);
 const publicApplication = item => { const { id, applicationNo, name, email, mobile, batchId, batchName, previousYearPercent, status, appliedAt } = item; return { id, applicationNo, name, email, mobile, batchId, batchName, previousYearPercent, status, appliedAt }; };
@@ -159,16 +100,24 @@ function allowApplicationRequest(req) {
   recent.push(Date.now()); admissionRequests.set(key, recent); return true;
 }
 function getSession(req) {
+  if (!sessionSecret) return null;
   const cookie = req.headers.cookie || '';
-  const match = cookie.match(/(?:^|;\s*)cs_session=([A-Za-z0-9_-]+)/);
+  const match = cookie.match(/(?:^|;\s*)cs_session=([A-Za-z0-9_.-]+)/);
   if (!match) return null;
-  const session = sessions.get(match[1]);
-  if (!session || session.expiresAt < Date.now()) { sessions.delete(match[1]); return null; }
-  return { ...session, token: match[1] };
+  const [payload, signature] = match[1].split('.');
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac('sha256', sessionSecret).update(payload).digest('base64url');
+  if (!safeEqual(signature, expected)) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!session.accountId || session.expiresAt < Date.now()) return null;
+    return { ...session, token: match[1] };
+  } catch { return null; }
 }
 function setSession(req, res, account) {
-  const token = randomToken();
-  sessions.set(token, { accountId: account.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000, otpVerified: false });
+  const payload = Buffer.from(JSON.stringify({ accountId: account.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000 })).toString('base64url');
+  const signature = crypto.createHmac('sha256', sessionSecret).update(payload).digest('base64url');
+  const token = `${payload}.${signature}`;
   const crossSite = allowedOrigins.has(req.headers.origin || '');
   res.setHeader('Set-Cookie', `cs_session=${token}; HttpOnly; SameSite=${crossSite ? 'None' : 'Strict'}; Path=/; Max-Age=43200${crossSite ? '; Secure' : ''}`);
 }
@@ -205,25 +154,25 @@ async function issueOtp(email, account, purpose) {
 }
 async function api(req, res, url) {
   let input;
-  try { input = await body(req, req.method === 'POST' && url.pathname === '/api/admissions/submit' ? 7 * 1024 * 1024 : 64 * 1024); } catch { return json(res, 400, { error: 'Invalid request body.' }); }
+  try { input = await body(req, req.method === 'POST' && url.pathname === '/api/admissions/submit' ? 7 * 1024 * 1024 : 1024 * 1024); } catch { return json(res, 400, { error: 'Invalid request body.' }); }
+  try { await loadAccounts(); } catch (error) { console.error('Google Sheets account read failed:', error.message); return json(res, 503, { error: error.message || 'Account storage is unavailable.' }); }
   const session = getSession(req);
 
-  if (req.method === 'GET' && url.pathname === '/api/admissions/admin/token') return json(res, 200, { token: admissionAdminToken });
+  if (req.method === 'GET' && url.pathname === '/api/admissions/admin/token') return sessionSecret ? json(res, 200, { token: admissionAdminToken }) : json(res, 503, { error: 'Set SESSION_SECRET in the Vercel environment before using administrator APIs.' });
 
-  if (req.method === 'GET' && url.pathname === '/api/admissions/public/config') return json(res, 200, { open: admissionConfig.open !== false, instituteName: admissionConfig.instituteName, academicYear: admissionConfig.academicYear });
-  if (req.method === 'GET' && url.pathname === '/api/admissions/public/batches') return json(res, 200, admissionConfig.open !== false ? admissionConfig.batches.filter(item => item.active !== false).map(({ id, name, course }) => ({ id, name, course })) : []);
+  if (req.method === 'GET' && url.pathname === '/api/admissions/public/config') { try { await loadAdmissionConfig(); return json(res, 200, { open: admissionConfig.open !== false, instituteName: admissionConfig.instituteName, academicYear: admissionConfig.academicYear }); } catch (error) { return json(res, 503, { error: error.message || 'Admission settings are unavailable.' }); } }
+  if (req.method === 'GET' && url.pathname === '/api/admissions/public/batches') { try { await loadAdmissionConfig(); return json(res, 200, admissionConfig.open !== false ? admissionConfig.batches.filter(item => item.active !== false).map(({ id, name, course }) => ({ id, name, course })) : []); } catch (error) { return json(res, 503, { error: error.message || 'Admission settings are unavailable.' }); } }
 
   if (req.method === 'POST' && url.pathname === '/api/admissions/submit') {
     if (!allowApplicationRequest(req)) return json(res, 429, { error: 'Too many applications from this connection. Please try again later.' });
     try {
       const result = await withAdmissionsQueue(async () => {
-        const workbook = await readAdmissionsWorkbook(); workbookSettings(workbook);
+        await loadAdmissionConfig();
         if (admissionConfig.open === false) return { status: 403, body: { error: 'Admissions are currently closed.' } };
         const batchRecord = admissionConfig.batches.find(item => item.id === cleanText(input.batchId, 120) && item.active !== false);
         const name = cleanText(input.name, 160), mobile = String(input.mobile || '').replace(/\D/g, '').slice(0, 10), email = cleanText(input.email, 200).toLowerCase();
         if (name.length < 2 || !['Male', 'Female', 'Other'].includes(input.gender) || !batchRecord || !/^\d{10}$/.test(mobile) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || input.declaration !== true) return { status: 400, body: { error: 'Check the required fields and try again.' } };
-        const sheet = workbook.getWorksheet('Admissions');
-        const existing = await readApplications(workbook, false);
+        const existing = await listApplications(false);
         if (existing.some(item => item.mobile === mobile && item.batchId === batchRecord.id && ['Pending', 'Under Review', 'Approved'].includes(item.status))) return { status: 409, body: { error: 'An application for this mobile number and batch is already being processed.' } };
         const year = String(admissionConfig.academicYear || new Date().getFullYear()).match(/\d{4}/)?.[0] || String(new Date().getFullYear());
         const number = Math.max(0, ...existing.map(item => Number(String(item.applicationNo || '').match(new RegExp(`^APP-${year}-(\\d+)$`))?.[1] || 0))) + 1;
@@ -237,59 +186,49 @@ async function api(req, res, url) {
           await fs.writeFile(path.join(admissionPhotosPath, photoFile), Buffer.from(photo.split(',')[1], 'base64'), { flag: 'wx' });
         }
         const appliedAt = new Date().toISOString();
-        const record = { applicationNo, appliedAt, status: 'Pending', name, gender: input.gender, dateOfBirth: cleanText(input.dateOfBirth, 20), batchId: batchRecord.id, batchName: cleanText(`${batchRecord.course ? `${batchRecord.course} - ` : ''}${batchRecord.name}`, 180), mobile, email, address: cleanText(input.address, 1000), photoFile, fatherName: cleanText(input.fatherName, 160), motherName: cleanText(input.motherName, 160), guardianPhone: String(input.guardianPhone || '').replace(/\D/g, '').slice(0, 10), previousSchool: cleanText(input.previousSchool, 200), previousYearPercent: input.previousYearPercent === '' ? '' : Number(input.previousYearPercent), declarationAcceptedAt: appliedAt, rejectReason: '', adminNotes: '', statusHistory: [{ status: 'Pending', at: appliedAt }] };
+        const record = { id: applicationNo, _type: 'application', applicationNo, appliedAt, status: 'Pending', name, gender: input.gender, dateOfBirth: cleanText(input.dateOfBirth, 20), batchId: batchRecord.id, batchName: cleanText(`${batchRecord.course ? `${batchRecord.course} - ` : ''}${batchRecord.name}`, 180), mobile, email, address: cleanText(input.address, 1000), photoFile, fatherName: cleanText(input.fatherName, 160), motherName: cleanText(input.motherName, 160), guardianPhone: String(input.guardianPhone || '').replace(/\D/g, '').slice(0, 10), previousSchool: cleanText(input.previousSchool, 200), previousYearPercent: input.previousYearPercent === '' ? '' : Number(input.previousYearPercent), declarationAcceptedAt: appliedAt, rejectReason: '', adminNotes: '', statusHistory: [{ status: 'Pending', at: appliedAt }] };
         if (record.previousYearPercent !== '' && (!Number.isFinite(record.previousYearPercent) || record.previousYearPercent < 0 || record.previousYearPercent > 100)) { if (photoFile) await fs.rm(path.join(admissionPhotosPath, photoFile), { force: true }); return { status: 400, body: { error: 'Last Year percentage must be between 0 and 100.' } }; }
-        saveApplicationRow(sheet, sheet.rowCount + 1, record);
-        try { await writeAdmissionsWorkbook(workbook); }
+        try { await sheetsStore.appendSheetRecord('Admissions', record); }
         catch (error) { if (photoFile) await fs.rm(path.join(admissionPhotosPath, photoFile), { force: true }).catch(() => {}); throw error; }
         return { status: 201, body: { ok: true, applicationNo, mobile, email } };
       });
       return json(res, result.status, result.body);
-    } catch (error) { return json(res, ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error.code) ? 423 : 500, { error: workbookError(error) }); }
+    } catch (error) { console.error('Admission write failed:', error.message); return json(res, 500, { error: error.message || 'Could not save the admission.' }); }
   }
   if (url.pathname.startsWith('/api/admissions/admin/')) {
     const actor = session && accounts.find(item => item.id === session.accountId);
     const suppliedToken = String(req.headers['x-admission-admin-token'] || '');
     if ((!actor || actor.role !== 'admin') && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage applications.' });
     if (req.method === 'GET' && url.pathname === '/api/admissions/admin/list') {
-      try { const applications = await withAdmissionsQueue(async () => readApplications(await readAdmissionsWorkbook(), true)); return json(res, 200, { applications }); }
-      catch (error) { return json(res, ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error.code) ? 423 : 500, { error: workbookError(error) }); }
+      try { return json(res, 200, { applications: await listApplications(true) }); }
+      catch (error) { console.error('Admission read failed:', error.message); return json(res, 500, { error: error.message || 'Could not read admissions.' }); }
     }
     if (req.method === 'POST' && url.pathname === '/api/admissions/admin/config') {
       try {
-        await withAdmissionsQueue(async () => {
-          const workbook = await readAdmissionsWorkbook(); workbookSettings(workbook);
-          admissionConfig = { ...admissionConfig, open: input.open !== false, academicYear: cleanText(input.academicYear || admissionConfig.academicYear, 30), batches: Array.isArray(input.batches) ? input.batches.slice(0, 500).map(item => ({ id: cleanText(item.id, 120), name: cleanText(item.name, 160), course: cleanText(item.course, 160), active: item.active !== false })) : admissionConfig.batches };
-          saveWorkbookSettings(workbook, admissionConfig); await writeAdmissionsWorkbook(workbook);
-        });
+        await loadAdmissionConfig();
+        const next = { ...admissionConfig, open: input.open !== false, academicYear: cleanText(input.academicYear || admissionConfig.academicYear, 30), batches: Array.isArray(input.batches) ? input.batches.slice(0, 500).map(item => ({ id: cleanText(item.id, 120), name: cleanText(item.name, 160), course: cleanText(item.course, 160), active: item.active !== false })) : admissionConfig.batches };
+        await saveAdmissionConfig(next);
         return json(res, 200, { ok: true });
-      } catch (error) { return json(res, ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error.code) ? 423 : 500, { error: workbookError(error) }); }
+      } catch (error) { console.error('Admission config write failed:', error.message); return json(res, 500, { error: error.message || 'Could not save admission settings.' }); }
     }
     const updateMatch = url.pathname.match(/^\/api\/admissions\/admin\/([^/]+)$/);
     if (req.method === 'POST' && updateMatch) {
       try {
-        const application = await withAdmissionsQueue(async () => {
-          const workbook = await readAdmissionsWorkbook(), sheet = workbook.getWorksheet('Admissions');
-          let targetRow; sheet.eachRow((row, rowNumber) => { if (rowNumber > 1 && excelText(row.getCell(1).value) === updateMatch[1]) targetRow = row; });
-          if (!targetRow) return { error: 'Application not found.', status: 404 };
-          const target = rowApplication(targetRow);
-          const status = ['Pending', 'Under Review', 'Approved', 'Rejected'].includes(input.status) ? input.status : target.status;
-          if (status === 'Rejected' && !cleanText(input.rejectReason, 1000)) return { error: 'A rejection reason is required.', status: 400 };
-          if (target.status === 'Approved' && status === 'Approved') return { unchanged: true, application: target };
-          if (status === 'Approved' && target.status !== 'Approved' && (!input.student || typeof input.student !== 'object' || !input.student.id)) return { error: 'Student details are required for approval.', status: 400 };
-          target.status = status; target.adminNotes = cleanText(input.adminNotes ?? target.adminNotes, 4000); target.rejectReason = status === 'Rejected' ? cleanText(input.rejectReason, 1000) : target.rejectReason || '';
-          if (status === 'Approved') target.student = { id: cleanText(input.student.id, 120) };
-          target.statusHistory.push({ status, at: new Date().toISOString(), reason: target.rejectReason || '' });
-          saveApplicationRow(sheet, targetRow.number, target); await writeAdmissionsWorkbook(workbook);
-          return { application: target };
-        });
-        if (application.error) return json(res, application.status, { error: application.error });
-        return json(res, 200, { ok: true, ...application });
-      } catch (error) { return json(res, ['EBUSY', 'EPERM', 'EACCES', 'ELOCKED'].includes(error.code) ? 423 : 500, { error: workbookError(error) }); }
+        const applications = await listApplications(false), target = applications.find(item => item.applicationNo === updateMatch[1]);
+        if (!target) return json(res, 404, { error: 'Application not found.' });
+        const status = ['Pending', 'Under Review', 'Approved', 'Rejected'].includes(input.status) ? input.status : target.status;
+        if (status === 'Rejected' && !cleanText(input.rejectReason, 1000)) return json(res, 400, { error: 'A rejection reason is required.' });
+        if (target.status === 'Approved' && status === 'Approved') return json(res, 200, { ok: true, unchanged: true, application: target });
+        if (status === 'Approved' && target.status !== 'Approved' && (!input.student || typeof input.student !== 'object' || !input.student.id)) return json(res, 400, { error: 'Student details are required for approval.' });
+        target.status = status; target.adminNotes = cleanText(input.adminNotes ?? target.adminNotes, 4000); target.rejectReason = status === 'Rejected' ? cleanText(input.rejectReason, 1000) : target.rejectReason || '';
+        if (status === 'Approved') target.student = { id: cleanText(input.student.id, 120) };
+        target.statusHistory = [...(target.statusHistory || []), { status, at: new Date().toISOString(), reason: target.rejectReason || '' }];
+        await saveApplication(target);
+        return json(res, 200, { ok: true, application: target });
+      } catch (error) { console.error('Admission update failed:', error.message); return json(res, 500, { error: error.message || 'Could not update the admission.' }); }
     }
     return json(res, 404, { error: 'Admission admin route not found.' });
   }
-
   if (req.method === 'POST' && url.pathname === '/api/auth/register') {
     const email = normalizeEmail(input.email), parentEmail = normalizeEmail(input.parentEmail);
     const duplicate = accounts.some(account => account.email === email || (parentEmail && account.email === parentEmail));
@@ -317,6 +256,7 @@ async function api(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+    if (!sessionSecret) return json(res, 503, { error: 'Set SESSION_SECRET in the Vercel environment before enabling sign-in.' });
     const email = normalizeEmail(input.email), key = `${requestIp(req)}:${email}`, lock = loginFailures.get(key);
     if (lock?.until > Date.now()) return json(res, 423, { error: 'Too many failed attempts. Try again in 15 minutes.' });
     const account = accounts.find(item => item.email === email);
@@ -335,7 +275,6 @@ async function api(req, res, url) {
     return account ? json(res, 200, { account: accountView(account) }) : json(res, 401, { error: 'Sign in required.' });
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
-    if (session) sessions.delete(session.token);
     const crossSite = allowedOrigins.has(req.headers.origin || '');
     res.setHeader('Set-Cookie', `cs_session=; HttpOnly; SameSite=${crossSite ? 'None' : 'Strict'}; Path=/; Max-Age=0${crossSite ? '; Secure' : ''}`);
     return json(res, 200, { ok: true });
@@ -367,13 +306,12 @@ async function api(req, res, url) {
       return json(res, 400, { error: challenge.attempts >= 5 ? 'Too many incorrect attempts. Request a new code.' : 'Incorrect code.' });
     }
     challenge.verified = true; otpChallenges.set(String(input.challengeId), challenge);
-    if (challenge.purpose === 'first-login' && session) { session.otpVerified = true; sessions.set(session.token, session); }
     return json(res, 200, { ok: true });
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/change-password') {
     const account = session && accounts.find(item => item.id === session.accountId);
     const flow = otpChallenges.get(String(input.challengeId || ''));
-    if (!account || !flow || flow.purpose !== 'first-login' || !flow.verified || !session.otpVerified || flow.expiresAt < Date.now()) return json(res, 403, { error: 'Verify your email code before changing the password.' });
+    if (!account || !flow || flow.purpose !== 'first-login' || !flow.verified || flow.accountId !== account.id || flow.expiresAt < Date.now()) return json(res, 403, { error: 'Verify your email code before changing the password.' });
     const next = String(input.password || '');
     if (!validPassword(next) || Object.values(initialPasswords).includes(next)) return json(res, 400, { error: 'Password does not meet the required rules.' });
     if (next !== input.confirmPassword) return json(res, 400, { error: 'Passwords do not match.' });
@@ -396,6 +334,46 @@ async function api(req, res, url) {
     for (const [id, challenge] of otpChallenges) if (challenge.email === account.email) otpChallenges.delete(id);
     return json(res, 200, { ok: true });
   }
+
+  const dataMatch = url.pathname.match(/^\/api\/(students|staff|payroll|courses|batches|attendance|fees|payments)(?:\/([^/]+))?$/);
+  if (dataMatch) {
+    const actor = session && accounts.find(item => item.id === session.accountId);
+    const suppliedToken = String(req.headers['x-admission-admin-token'] || '');
+    if ((!actor || actor.role !== 'admin') && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage records.' });
+    const collections = {
+      students: ['Students', 'student'], staff: ['Staff', 'staff'], payroll: ['Staff', 'payroll'], courses: ['Courses', 'course'],
+      batches: ['Batches', 'batch'], attendance: ['Attendance', 'attendance'], fees: ['Fees', 'fee'], payments: ['Fees', 'payment'],
+    };
+    const [tab, type] = collections[dataMatch[1]], recordId = dataMatch[2] ? cleanText(decodeURIComponent(dataMatch[2]), 160) : '';
+    try {
+      const all = await sheetsStore.getSheetRecords(tab);
+      const records = all.filter(item => item._type === 'app-data' && item.collection === type);
+      if (req.method === 'GET' && !recordId) return json(res, 200, { records: records.map(({ _type, collection, ...record }) => record) });
+      if (req.method === 'POST' && !recordId) {
+        const incoming = Array.isArray(input.records) ? input.records : [input.record || input];
+        if (!incoming.length || incoming.length > 1000 || incoming.some(item => !item || typeof item !== 'object' || Array.isArray(item))) return json(res, 400, { error: 'Provide between 1 and 1000 record objects.' });
+        const additions = incoming.map(item => ({ ...item, id: cleanText(item.id || randomToken(16), 160), _type: 'app-data', collection: type }));
+        if (additions.some(item => records.some(existing => existing.id === item.id))) return json(res, 409, { error: 'A record with that id already exists.' });
+        await sheetsStore.saveSheetRecords(tab, [...all, ...additions]);
+        return json(res, 201, { records: additions.map(({ _type, collection, ...record }) => record) });
+      }
+      if (recordId && req.method === 'PUT') {
+        const target = records.find(item => item.id === recordId);
+        if (!target) return json(res, 404, { error: 'Record not found.' });
+        const replacement = { ...(input.record || input), id: recordId, _type: 'app-data', collection: type };
+        await sheetsStore.saveSheetRecords(tab, all.map(item => item.id === recordId && item._type === 'app-data' && item.collection === type ? replacement : item));
+        const { _type, collection, ...record } = replacement;
+        return json(res, 200, { record });
+      }
+      if (recordId && req.method === 'DELETE') {
+        const remaining = all.filter(item => !(item.id === recordId && item._type === 'app-data' && item.collection === type));
+        if (remaining.length === all.length) return json(res, 404, { error: 'Record not found.' });
+        await sheetsStore.saveSheetRecords(tab, remaining);
+        return json(res, 200, { ok: true });
+      }
+      return json(res, 405, { error: 'Method not allowed for this records route.' });
+    } catch (error) { console.error(`Google Sheets ${dataMatch[1]} request failed:`, error.message); return json(res, 503, { error: error.message || 'Google Sheets could not complete this request.' }); }
+  }
   return json(res, 404, { error: 'API route not found.' });
 }
 
@@ -404,7 +382,7 @@ async function handleRequest(req, res) {
   if (applyCors(req, res, url.pathname)) return;
   if (url.pathname === '/health') return req.method === 'GET' ? json(res, 200, { ok: true }) : json(res, 405, { error: 'Method not allowed.' });
   if (url.pathname.startsWith('/api/')) {
-    if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
+    if (!['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'].includes(req.method)) return json(res, 405, { error: 'Method not allowed.' });
     return api(req, res, url).catch(() => json(res, 500, { error: 'Authentication service error.' }));
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('Method not allowed'); }
@@ -444,8 +422,6 @@ function close(server) {
 }
 
 async function start() {
-  await loadAccounts();
-  await loadAdmissions();
   if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
   const isProduction = Boolean(process.env.PORT);
   const bindHost = isProduction ? '0.0.0.0' : '127.0.0.1';
@@ -466,4 +442,6 @@ async function start() {
   console.log(`Form URL: ${baseUrl}/form.html`);
 }
 
-start().catch(error => { console.error(`Could not start My JEE Mentor: ${error.message}`); process.exitCode = 1; });
+if (require.main === module) start().catch(error => { console.error(`Could not start My JEE Mentor: ${error.message}`); process.exitCode = 1; });
+
+module.exports = { handleRequest, start };

@@ -11,6 +11,6 @@
     "autopush": "node auto-push.js"
   },
   "dependencies": {
-    "exceljs": "^4.4.0"
+    "googleapis": "^186.0.0"
   }
 }
