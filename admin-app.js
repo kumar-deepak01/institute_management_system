@@ -2,6 +2,7 @@
   "use strict";
 
   const root = document.getElementById("app");
+  const API_BASE = window.API_BASE || "";
   const dialog = document.getElementById("action-dialog");
   const dialogBody = document.getElementById("dialog-content");
   const toastRegion = document.getElementById("toast-region");
@@ -1030,17 +1031,17 @@
       if (!linkedStudent) {
         createdStudent = { id: uid("student"), name: item.name, gender: item.gender || "", dateOfBirth: item.dateOfBirth || "", email: item.email, phone: item.mobile, address: item.address || "", photoData: item.photo || "", fatherName: item.fatherName || "", motherName: item.motherName || "", parentName: item.fatherName || item.motherName || "", guardianPhone: item.guardianPhone || "", previousSchool: item.previousSchool || "", previousYearPercent: item.previousYearPercent ?? "", courseId: batch(item.batchId)?.courseId || "", batchId: item.batchId || "", academicYearId: batch(item.batchId)?.academicYearId || data.academicYears[0]?.id || "", admissionDate: today, admissionNo: item.applicationNo, roll: `CS-${1001 + data.students.length}`, attendance: 0, status: "Active", source: "Online Admission", applicationId: item.id, photoName: "" };
         try {
-          const registration = await fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ studentId: createdStudent.id, name: createdStudent.name, email: createdStudent.email, parentEmail: "", parentName: createdStudent.parentName }) });
+          const registration = await fetch(API_BASE + "/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ studentId: createdStudent.id, name: createdStudent.name, email: createdStudent.email, parentEmail: "", parentName: createdStudent.parentName }) });
           const account = await registration.json(); if (!registration.ok) throw new Error(account.error || "Student login could not be created."); rollbackToken = account.rollbackToken;
         } catch (error) { return toast(error.message, true); }
-        if (!commit("Student record created from the approved admission.", (draft) => draft.students.push(createdStudent))) { if (rollbackToken) fetch("/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {}); return; }
+        if (!commit("Student record created from the approved admission.", (draft) => draft.students.push(createdStudent))) { if (rollbackToken) fetch(API_BASE + "/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {}); return; }
       }
     }
     const studentRecord = linkedStudent || createdStudent;
     const payload = { status, rejectReason, adminNotes: dialogBody?.querySelector("[data-adm-notes]")?.value || item.adminNotes || "", ...(studentRecord ? { student: studentRecord } : {}) };
     await updateAdmission(id, payload, status === "Approved" ? "Application approved; student record created." : `Application marked ${status}.`, async () => {
       if (createdStudent) commit("Rolled back incomplete application approval.", (draft) => { draft.students = draft.students.filter((studentItem) => studentItem.id !== createdStudent.id); });
-      if (rollbackToken) await fetch("/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {});
+      if (rollbackToken) await fetch(API_BASE + "/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {});
     });
   }
   async function updateAdmission(id, payload, message, rollback = null) {
@@ -1053,13 +1054,13 @@
     const generic = "Cannot reach the server. Make sure the server is running (npm start) and open the admin at the same address.";
     try {
       if (!admissionAdminToken) {
-        const tokenResponse = await fetch("/api/admissions/admin/token", { credentials: "same-origin" });
+        const tokenResponse = await fetch(API_BASE + "/api/admissions/admin/token", { credentials: "same-origin" });
         if (!tokenResponse.ok || !(tokenResponse.headers.get("content-type") || "").toLowerCase().includes("application/json")) throw new Error(generic);
         const tokenResult = await tokenResponse.json(); admissionAdminToken = String(tokenResult.token || "");
         if (!admissionAdminToken) throw new Error(generic);
       }
       const headers = new Headers(options.headers || {}); headers.set("X-Admission-Admin-Token", admissionAdminToken);
-      const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
+      const response = await fetch(API_BASE + path, { ...options, headers, credentials: "same-origin" });
       if (!(response.headers.get("content-type") || "").toLowerCase().includes("application/json")) throw new Error(generic);
       let result; try { result = await response.json(); } catch { throw new Error(generic); }
       if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "Administrator access is unavailable. Open the admin app from the running server and retry." : result.error || generic);
@@ -1381,13 +1382,13 @@
       const record = { id: uid("student"), ...values, admissionNo, email, phone: phoneNumber, parentEmail, courseId: selectedBatch.courseId, academicYearId: selectedBatch.academicYearId, subjects: [...form.querySelectorAll('input[name="subjects"]:checked')].map((input) => input.value), admissionDate: today, roll: `CS-${1001 + data.students.length}`, attendance: 0, status: "Active", photoName: form.querySelector("#student-photo")?.files?.[0]?.name || "", photoData };
       let rollbackToken = "";
       try {
-        const response = await fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ studentId: record.id, name: record.name, email: record.email, parentEmail: record.parentEmail, parentName: record.parentName || record.fatherName }) });
+        const response = await fetch(API_BASE + "/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ studentId: record.id, name: record.name, email: record.email, parentEmail: record.parentEmail, parentName: record.parentName || record.fatherName }) });
         const result = await response.json();
         if (!response.ok) return formError(form, result.error || "Login accounts could not be created.");
         rollbackToken = result.rollbackToken || "";
       } catch { return formError(form, "Authentication service is unavailable. Start the local server before admitting a student."); }
       const ok = commit("Student admitted successfully.", (draft) => draft.students.push(record));
-      if (!ok && rollbackToken) fetch("/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {});
+      if (!ok && rollbackToken) fetch(API_BASE + "/api/auth/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rollbackToken }) }).catch(() => {});
       if (photoPreview) URL.revokeObjectURL(photoPreview); photoPreview = ""; photoData = "";
       cameraStream?.getTracks().forEach((track) => track.stop()); cameraStream = null;
       return finish(ok, "", ok ? "students" : "");

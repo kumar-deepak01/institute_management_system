@@ -1,7 +1,8 @@
 (() => {
   const app = document.getElementById('app');
+  const API_BASE = window.API_BASE || '';
   const api = async (path, payload = {}) => {
-    const response = await fetch(path, { method: path.endsWith('/me') ? 'GET' : 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...(path.endsWith('/me') ? {} : { body: JSON.stringify(payload) }) });
+    const response = await fetch(API_BASE + path, { method: path.endsWith('/me') ? 'GET' : 'POST', credentials: API_BASE ? 'include' : 'same-origin', headers: { 'Content-Type': 'application/json' }, ...(path.endsWith('/me') ? {} : { body: JSON.stringify(payload) }) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'The request could not be completed.');
     return result;

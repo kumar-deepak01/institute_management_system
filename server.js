@@ -14,6 +14,7 @@ const admissionsDirectory = path.join(root, 'data');
 const admissionsPath = path.join(admissionsDirectory, 'admissions.xlsx');
 const admissionPhotosPath = path.join(root, 'uploads', 'admissions');
 const requestedPort = Number(process.env.PORT || process.argv[2] || 3000);
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || 'https://institutemanagementsystem-lake.vercel.app').split(',').map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean));
 const initialPasswords = { student: 'JeemStudent@12345', parent: 'JeemParent@12345' };
 const sessions = new Map();
 const loginFailures = new Map();
@@ -46,6 +47,20 @@ async function saveAccounts(next) {
 function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(value));
+}
+function isCorsResource(pathname) { return pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/uploads/') || /\/(?:photo|photos|export|exports)(?:\/|$)/i.test(pathname); }
+function applyCors(req, res, pathname) {
+  if (!isCorsResource(pathname)) return false;
+  res.setHeader('Vary', 'Origin');
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admission-Admin-Token');
+  }
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return true; }
+  return false;
 }
 async function body(req, maxSize = 64 * 1024) {
   let input = '';
@@ -151,10 +166,11 @@ function getSession(req) {
   if (!session || session.expiresAt < Date.now()) { sessions.delete(match[1]); return null; }
   return { ...session, token: match[1] };
 }
-function setSession(res, account) {
+function setSession(req, res, account) {
   const token = randomToken();
   sessions.set(token, { accountId: account.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000, otpVerified: false });
-  res.setHeader('Set-Cookie', `cs_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+  const crossSite = allowedOrigins.has(req.headers.origin || '');
+  res.setHeader('Set-Cookie', `cs_session=${token}; HttpOnly; SameSite=${crossSite ? 'None' : 'Strict'}; Path=/; Max-Age=43200${crossSite ? '; Secure' : ''}`);
 }
 function accountView(account) { return { email: account.email, role: account.role, name: account.name, studentId: account.studentId, mustChangePassword: account.mustChangePassword }; }
 function requestIp(req) { return req.socket.remoteAddress || 'local'; }
@@ -310,7 +326,7 @@ async function api(req, res, url) {
       loginFailures.set(key, failures >= 5 ? { count: 5, until: Date.now() + 15 * 60 * 1000 } : { count: failures, until: 0 });
       return json(res, 401, { error: failures >= 5 ? 'Too many failed attempts. Try again in 15 minutes.' : 'Email or password is incorrect.' });
     }
-    loginFailures.delete(key); setSession(res, account);
+    loginFailures.delete(key); setSession(req, res, account);
     return json(res, 200, { ok: true, account: accountView(account) });
   }
 
@@ -320,7 +336,8 @@ async function api(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
     if (session) sessions.delete(session.token);
-    res.setHeader('Set-Cookie', 'cs_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+    const crossSite = allowedOrigins.has(req.headers.origin || '');
+    res.setHeader('Set-Cookie', `cs_session=; HttpOnly; SameSite=${crossSite ? 'None' : 'Strict'}; Path=/; Max-Age=0${crossSite ? '; Secure' : ''}`);
     return json(res, 200, { ok: true });
   }
 
@@ -384,6 +401,7 @@ async function api(req, res, url) {
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  if (applyCors(req, res, url.pathname)) return;
   if (url.pathname === '/health') return req.method === 'GET' ? json(res, 200, { ok: true }) : json(res, 405, { error: 'Method not allowed.' });
   if (url.pathname.startsWith('/api/')) {
     if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });

@@ -1,5 +1,6 @@
 (() => {
   "use strict";
+  const API_BASE = window.API_BASE || "";
   const main = document.getElementById("apply-main");
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   const icon = (name) => {
@@ -55,7 +56,7 @@
     if (firstError) { firstError.scrollIntoView({ behavior: "smooth", block: "center" }); firstError.querySelector?.("input,select,textarea")?.focus({ preventScroll: true }); return; }
     const button = form.querySelector("button[type=submit]"); button.disabled = true;
     try {
-      const response = await fetch("/api/admissions/submit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...values, declaration: true, photo: photoData }) });
+      const response = await fetch(API_BASE + "/api/admissions/submit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...values, declaration: true, photo: photoData }) });
       const result = await response.json();
       if (!response.ok) { errorBox.textContent = result.error || "Could not submit the application."; button.disabled = false; return; }
       main.innerHTML = `<section class="apply-success"><span class="apply-success-check" aria-hidden="true">✓</span><h2>Application Submitted</h2><div class="apply-success-number">${escapeHtml(result.applicationNo)}</div><p>We will contact you on ${escapeHtml(result.mobile)} / ${escapeHtml(result.email)}.</p><button class="apply-again" type="button">Submit another application</button></section>`;
@@ -64,7 +65,7 @@
   }
   async function init() {
     try {
-      const [configResponse, batchResponse] = await Promise.all([fetch("/api/admissions/public/config"), fetch("/api/admissions/public/batches")]);
+      const [configResponse, batchResponse] = await Promise.all([fetch(API_BASE + "/api/admissions/public/config"), fetch(API_BASE + "/api/admissions/public/batches")]);
       if (!configResponse.ok || !batchResponse.ok) throw new Error("Admission service unavailable.");
       const config = await configResponse.json(), batches = await batchResponse.json();
       if (!config.open) return closed();
