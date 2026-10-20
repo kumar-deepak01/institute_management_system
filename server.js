@@ -384,6 +384,7 @@ async function api(req, res, url) {
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  if (url.pathname === '/health') return req.method === 'GET' ? json(res, 200, { ok: true }) : json(res, 405, { error: 'Method not allowed.' });
   if (url.pathname.startsWith('/api/')) {
     if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
     return api(req, res, url).catch(() => json(res, 500, { error: 'Authentication service error.' }));
@@ -428,19 +429,23 @@ async function start() {
   await loadAccounts();
   await loadAdmissions();
   if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
+  const isProduction = Boolean(process.env.PORT);
+  const bindHost = isProduction ? '0.0.0.0' : '127.0.0.1';
   const ipv4 = http.createServer(handleRequest), ipv6 = http.createServer(handleRequest);
   try {
-    await listen(ipv4, requestedPort, '127.0.0.1');
-    await listen(ipv6, requestedPort, '::1');
+    await listen(ipv4, requestedPort, bindHost);
+    if (!isProduction) await listen(ipv6, requestedPort, '::1');
   } catch (error) {
     await Promise.all([close(ipv4), close(ipv6)]);
     if (error.code === 'EADDRINUSE') throw new Error(`Port ${requestedPort} is already in use, close the old server.`);
     throw error;
   }
   ipv4.on('error', error => console.error(`IPv4 listener error: ${error.message}`));
-  ipv6.on('error', error => console.error(`IPv6 listener error: ${error.message}`));
-  console.log(`Admin URL: http://127.0.0.1:${requestedPort}/admin.html#admissions`);
-  console.log(`Form URL: http://127.0.0.1:${requestedPort}/form.html`);
+  if (!isProduction) ipv6.on('error', error => console.error(`IPv6 listener error: ${error.message}`));
+  const baseUrl = String(process.env.RENDER_EXTERNAL_URL || `http://${bindHost}:${requestedPort}`).replace(/\/+$/, '');
+  console.log(`Listening on: http://${bindHost}:${requestedPort}`);
+  console.log(`Admin URL: ${baseUrl}/admin.html#admissions`);
+  console.log(`Form URL: ${baseUrl}/form.html`);
 }
 
 start().catch(error => { console.error(`Could not start My JEE Mentor: ${error.message}`); process.exitCode = 1; });
