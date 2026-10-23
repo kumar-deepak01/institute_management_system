@@ -10,6 +10,10 @@ const { handleStaticRoute } = require('./routes/staticRoutes');
 const { verifyPhotoBucket } = require('./services/photoStorage');
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction) {
+  // Render receives requests through Vercel and Render proxies; trust both for client IP rate limiting.
+  app.set('trust proxy', 2);
+}
 const apiRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 600, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests. Please try again later.' } });
 
 app.disable('x-powered-by');
