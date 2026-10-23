@@ -8,7 +8,7 @@ function applyCors(req, res, pathname) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admission-Admin-Token, X-CSRF-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Admission-Admin-Token, X-CSRF-Token');
   }
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return true; }
   return false;

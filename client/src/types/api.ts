@@ -1,5 +1,5 @@
 export interface ApiError { error: string }
-export interface ApiOptions extends Omit<RequestInit, 'body'> { body?: unknown }
+export interface ApiOptions extends Omit<RequestInit, 'body'> { body?: unknown; serviceUnavailableMessage?: string }
 export interface Account { email: string; role: 'admin' | 'teacher' | 'student' | 'parent'; name: string; studentId?: string; mustChangePassword?: boolean }
 export interface HealthResponse { ok: boolean }
 export interface AdmissionConfig { open: boolean; instituteName: string; academicYear: string }

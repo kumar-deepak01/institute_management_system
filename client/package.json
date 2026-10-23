@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
+    "test:login-api": "node tests/login-api.test.cjs",
     "test:teacher-theme": "node tests/teacher-theme.test.cjs",
     "test:student-panel": "node tests/student-panel.test.cjs",
     "preview": "vite preview --host 127.0.0.1"
