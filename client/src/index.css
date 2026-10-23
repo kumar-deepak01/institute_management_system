@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { font-family: 'DM Sans', sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
+html, body, #root { width: 100%; min-height: 100%; margin: 0; }
+html { scrollbar-gutter: stable; }
+body { min-width: 320px; }
+
+.admin-scrollbar { scrollbar-width: thin; scrollbar-color: #2864ed #eef2f8; }
+.admin-scrollbar::-webkit-scrollbar { width: 7px; }
+.admin-scrollbar::-webkit-scrollbar-track { background: #eef2f8; }
+.admin-scrollbar::-webkit-scrollbar-thumb { border-radius: 999px; background: #2864ed; }

@@ -1,0 +1,123 @@
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { approveApplication, getAdminAdmissionLookups, getAdmissionStats, getApplications, updateAdmissionSettings, updateApplication } from '../services/admissions';
+import type { AdmissionApplication, AdmissionBatch, AdmissionConfig } from '../types/api';
+
+type AdmissionRecord = AdmissionApplication & {
+  gender?: string; dateOfBirth?: string; address?: string; fatherName?: string; motherName?: string; student?:{id:string;name?:string};
+  guardianPhone?: string; previousSchool?: string; declarationAcceptedAt?: string | null; studentId?: string | null;
+};
+type Stats = { total: number; pending: number; underReview: number; approved: number; rejected: number; schemaPending?: boolean };
+type AdmissionCache = { applications: AdmissionRecord[]; total: number; pages: number; stats: Stats; batches: AdmissionBatch[]; config: AdmissionConfig };
+const cache = new Map<string, AdmissionCache>();
+const emptyStats: Stats = { total: 0, pending: 0, underReview: 0, approved: 0, rejected: 0 };
+const emptyConfig: AdmissionConfig = { open: true, instituteName: 'My JEE Mentor', academicYear: '' };
+const statusStyles: Record<string,string> = {
+  Pending: 'bg-amber-50 text-amber-700 ring-amber-200',
+  'Under Review': 'bg-blue-50 text-blue-700 ring-blue-200',
+  Approved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  Rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
+};
+const dateText = (value?: string | null) => value ? new Date(value).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+const timeAgo = (value?: string | null) => {
+  if(!value)return '';
+  const minutes=Math.max(0,Math.floor((Date.now()-new Date(value).getTime())/60000));
+  if(minutes<1)return 'Just now';if(minutes<60)return `${minutes} minute${minutes===1?'':'s'} ago`;
+  const hours=Math.floor(minutes/60);if(hours<24)return `${hours} hour${hours===1?'':'s'} ago`;
+  const days=Math.floor(hours/24);return `${days} day${days===1?'':'s'} ago`;
+};
+
+function Glyph({name,className='h-5 w-5'}:{name:'copy'|'external'|'refresh'|'search'|'eye'|'calendar'|'close'|'check'|'clock'|'user';className?:string}) {
+  const paths:Record<string,ReactNode>={
+    copy:<><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></>,
+    external:<><path d="M14 3h7v7"/><path d="m21 3-9 9"/><path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></>,
+    refresh:<><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"/></>,
+    search:<><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
+    eye:<><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></>,
+    calendar:<><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>,
+    close:<path d="m6 6 12 12M18 6 6 18"/>,
+    check:<path d="m5 12 4 4L19 6"/>,
+    clock:<><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+    user:<><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
+  };
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>{paths[name]}</svg>;
+}
+
+const ApplicationRow=memo(function ApplicationRow({item,onOpen}:{item:AdmissionRecord;onOpen:(item:AdmissionRecord)=>void}){
+  return <tr className="border-t border-slate-100 hover:bg-slate-50/80">
+    <td className="whitespace-nowrap px-4 py-4"><span className="rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs font-extrabold text-indigo-700">{item.applicationNo}</span></td>
+    <td className="min-w-56 px-4 py-4"><div className="flex items-center gap-3">{item.photo?<img src={item.photo} alt="" loading="lazy" className="h-10 w-10 rounded-full object-cover"/>:<span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-indigo-50 text-sm font-bold text-indigo-700">{item.name?.trim().slice(0,1).toUpperCase()||<Glyph name="user"/>}</span>}<span className="min-w-0"><b className="block truncate text-sm text-slate-800">{item.name}</b><small className="block max-w-52 truncate text-xs text-slate-500">{item.email}</small></span></div></td>
+    <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{item.mobile}</td>
+    <td className="max-w-52 px-4 py-4"><span className="block truncate text-sm font-semibold text-slate-700">{item.batchName||'—'}</span></td>
+    <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{item.previousYearPercent===''||item.previousYearPercent==null?'—':`${item.previousYearPercent}%`}</td>
+    <td className="whitespace-nowrap px-4 py-4"><span className="block text-sm text-slate-700">{dateText(item.appliedAt)}</span><small className="text-xs text-slate-400">{timeAgo(item.appliedAt)}</small></td>
+    <td className="whitespace-nowrap px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ${statusStyles[item.status]||statusStyles.Pending}`}>{item.status}</span></td>
+    <td className="px-4 py-4"><button type="button" onClick={()=>onOpen(item)} aria-label={`View application ${item.applicationNo}`} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"><Glyph name="eye"/></button></td>
+  </tr>;
+});
+
+export default function AdminAdmissionsPage(){
+  const navigate=useNavigate();
+  const [applications,setApplications]=useState<AdmissionRecord[]>([]),[stats,setStats]=useState<Stats>(emptyStats),[batches,setBatches]=useState<AdmissionBatch[]>([]),[config,setConfig]=useState<AdmissionConfig>(emptyConfig);
+  const applicationCount=useRef(0);
+  const [search,setSearch]=useState(''),[debouncedSearch,setDebouncedSearch]=useState(''),[status,setStatus]=useState(''),[batchId,setBatchId]=useState(''),[page,setPage]=useState(1),[pages,setPages]=useState(1),[total,setTotal]=useState(0);
+  const [loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false),[error,setError]=useState(''),[schemaPending,setSchemaPending]=useState(false),[selected,setSelected]=useState<AdmissionRecord|null>(null),[notes,setNotes]=useState(''),[rejectReason,setRejectReason]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  const params=useMemo(()=>{const query=new URLSearchParams({page:String(page),limit:'10'});if(debouncedSearch)query.set('q',debouncedSearch);if(status)query.set('status',status);if(batchId)query.set('batch',batchId);return query.toString();},[page,debouncedSearch,status,batchId]);
+  const load=useCallback(async()=>{
+    const cached=cache.get(params);
+     if(cached){applicationCount.current=cached.applications.length;setApplications(cached.applications);setTotal(cached.total);setPages(cached.pages);setStats(cached.stats);setBatches(cached.batches);setConfig(cached.config);setLoading(false);setRefreshing(true);}
+     else if(!applicationCount.current)setLoading(true);
+    setError('');
+    const [listResult,statsResult,lookupResult]=await Promise.allSettled([getApplications(params),getAdmissionStats(),getAdminAdmissionLookups()]);
+    if(listResult.status==='fulfilled'){
+       const list=listResult.value;applicationCount.current=list.applications.length;setApplications(list.applications as AdmissionRecord[]);setTotal(list.total);setPages(list.pages);setSchemaPending(Boolean(list.schemaPending));
+      const nextStats=statsResult.status==='fulfilled'?statsResult.value:cache.get(params)?.stats||emptyStats;
+      const nextBatches=lookupResult.status==='fulfilled'?lookupResult.value.batches:cache.get(params)?.batches||[];
+      const nextConfig=lookupResult.status==='fulfilled'?lookupResult.value.config:cache.get(params)?.config||emptyConfig;
+      setStats(nextStats);setBatches(nextBatches);setConfig(nextConfig);setSchemaPending(value=>value||Boolean(statsResult.status==='fulfilled'&&statsResult.value.schemaPending)||Boolean(lookupResult.status==='fulfilled'&&lookupResult.value.schemaPending));
+      cache.set(params,{applications:list.applications as AdmissionRecord[],total:list.total,pages:list.pages,stats:nextStats,batches:nextBatches,config:nextConfig});if(cache.size>20)cache.delete(cache.keys().next().value!);
+    }else setError(listResult.reason instanceof Error?listResult.reason.message:'Admissions could not be loaded.');
+    if(statsResult.status==='fulfilled')setStats(statsResult.value);
+    if(lookupResult.status==='fulfilled'){setBatches(lookupResult.value.batches);setConfig(lookupResult.value.config);}
+    setLoading(false);setRefreshing(false);
+   },[params]);
+  useEffect(()=>{const timer=window.setTimeout(()=>{setPage(1);setDebouncedSearch(search.trim());},300);return()=>window.clearTimeout(timer);},[search]);
+  useEffect(()=>{void load();},[load]);
+  useEffect(()=>{const timer=window.setInterval(()=>{if(document.visibilityState==='visible'){cache.delete(params);void load();}},15000);return()=>window.clearInterval(timer);},[load,params]);
+  const openApplication=useCallback((item:AdmissionRecord)=>{setSelected(item);setNotes(item.adminNotes||'');setRejectReason(item.rejectReason||'');setNotice('');},[]);
+  const closeApplication=()=>{if(!busy)setSelected(null);};
+  const refresh=()=>{cache.delete(params);void load();};
+  async function copyLink(){const link=`${window.location.origin}/form.html`;try{await navigator.clipboard.writeText(link);setNotice('Public admission link copied.');}catch{setNotice(link);}}
+  async function toggleOpen(){setBusy(true);setError('');try{const result=await updateAdmissionSettings(!config.open);setConfig(result.config);cache.clear();setNotice(result.config.open?'Admissions are open.':'Admissions are closed.');}catch(reason){setError(reason instanceof Error?reason.message:'Admission settings could not be saved.');}finally{setBusy(false);}}
+  async function saveChanges(nextStatus?:'Pending'|'Under Review'|'Rejected'){
+    if(!selected)return;
+    if(nextStatus==='Rejected'&&!rejectReason.trim()){setError('Enter a reason before rejecting this application.');return;}
+    setBusy(true);setError('');
+    try{await updateApplication(selected.applicationNo,{adminNotes:notes,...(nextStatus?{status:nextStatus}:{}),...(nextStatus==='Rejected'?{rejectReason}: {})});setSelected(null);cache.clear();setNotice(nextStatus?`Application marked ${nextStatus}.`:'Admin notes saved.');await load();}
+    catch(reason){setError(reason instanceof Error?reason.message:'Application could not be updated.');}
+    finally{setBusy(false);}
+  }
+  async function approve(){if(!selected||!window.confirm(`Approve ${selected.name} and create or link the student record?`))return;setBusy(true);setError('');try{await approveApplication(selected.applicationNo,undefined,notes);setSelected(null);cache.clear();setNotice('Application approved and student record linked.');await load();}catch(reason){setError(reason instanceof Error?reason.message:'Application could not be approved.');}finally{setBusy(false);}}
+  const canReview=selected&&['Pending','Under Review'].includes(selected.status);
+  const cards=[['Total applications',stats.total,'text-indigo-700','bg-indigo-50'],['Pending',stats.pending,'text-amber-700','bg-amber-50'],['Under review',stats.underReview,'text-blue-700','bg-blue-50'],['Approved',stats.approved,'text-emerald-700','bg-emerald-50'],['Rejected',stats.rejected,'text-rose-700','bg-rose-50']] as const;
+
+  return <section className="space-y-6 pb-8">
+    <header className="flex flex-col justify-between gap-4 md:flex-row md:items-start"><div><h2 className="text-3xl font-black text-blue-600">Online Admissions</h2><p className="mt-1 text-sm text-slate-500">Manage student applications and the enrollment pipeline</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={()=>void toggleOpen()} disabled={busy} className={`rounded-xl px-4 py-2.5 text-sm font-bold shadow-sm disabled:opacity-50 ${config.open?'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200':'bg-rose-50 text-rose-700 ring-1 ring-rose-200'}`}>{config.open?'Admissions open · Turn off':'Admissions closed · Turn on'}</button><a href="/form.html" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700"><Glyph name="external"/> Preview form</a><button type="button" onClick={()=>void copyLink()} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm"><Glyph name="copy"/> Copy link</button><button type="button" onClick={refresh} aria-label="Refresh applications" className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600"><Glyph name="refresh"/></button></div></header>
+    <section className="flex flex-col justify-between gap-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:flex-row sm:items-center"><div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-indigo-50 text-indigo-600"><Glyph name="external"/></span><div><b className="text-sm">Public Admission Form</b><p className="mt-1 break-all font-mono text-xs text-slate-500">{window.location.origin}/form.html</p></div></div><div className="flex items-center gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${config.open?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{config.open?'Accepting applications':'Not accepting applications'}</span><span className="text-xs text-slate-400">{config.academicYear}</span></div></section>
+    {notice&&<p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
+    {schemaPending&&<p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">Some optional admissions data is not available yet. Run the pending server migrations.</p>}
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{cards.map(([label,value,color,tint])=><article key={label} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><span className={`grid h-11 w-11 place-items-center rounded-xl ${tint} ${color}`}><Glyph name={label==='Pending'?'clock':label==='Total applications'?'user':'check'}/></span><div><strong className={`block text-2xl font-black ${color}`}>{value}</strong><span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">{label}</span></div></article>)}</div>
+    <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:flex-row xl:items-center"><label className="relative min-w-0 flex-1"><Glyph name="search" className="absolute left-3 top-3 h-5 w-5 text-slate-400"/><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search application number, name, email or phone..." className="w-full rounded-xl border border-slate-300 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-blue-400 focus:bg-white"/></label><select value={status} onChange={event=>{setStatus(event.target.value);setPage(1);}} aria-label="Filter by status" className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"><option value="">All statuses</option>{['Pending','Under Review','Approved','Rejected'].map(value=><option key={value}>{value}</option>)}</select><select value={batchId} onChange={event=>{setBatchId(event.target.value);setPage(1);}} aria-label="Filter by batch" className="max-w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm xl:max-w-64"><option value="">All batches</option>{batches.map(batch=><option key={batch.id} value={batch.id}>{batch.course?`${batch.course} · `:''}{batch.name}</option>)}</select><button type="button" onClick={()=>{setSearch('');setDebouncedSearch('');setStatus('');setBatchId('');setPage(1);}} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-600">Clear</button><span className="text-xs text-slate-400">{refreshing?'Updating…':''}</span></section>
+    {error&&<div role="alert" className="flex flex-col justify-between gap-3 rounded-xl border border-rose-200 bg-white p-4 text-sm text-rose-700 sm:flex-row sm:items-center"><span>{error}</span><button type="button" onClick={()=>void load()} className="font-bold underline">Retry</button></div>}
+    <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] border-collapse text-left"><thead className="bg-gradient-to-r from-blue-50 to-indigo-100 text-[11px] font-black uppercase tracking-wide text-blue-600"><tr>{['Application #','Applicant','Phone','For batch','Prev %','Applied','Status','Actions'].map(item=><th key={item} className="px-4 py-4">{item}</th>)}</tr></thead><tbody>{loading&&applications.length===0?Array.from({length:5},(_,index)=><tr key={index} className="border-t"><td colSpan={8} className="px-4 py-5"><span className="block h-4 animate-pulse rounded bg-slate-100"/></td></tr>):applications.length?applications.map(item=><ApplicationRow key={item.applicationNo} item={item} onOpen={openApplication}/>):<tr><td colSpan={8} className="px-6 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-slate-50 text-slate-300"><Glyph name="user" className="h-7 w-7"/></div><b className="mt-4 block text-slate-700">{loading?'Loading applications…':'No applications yet'}</b><p className="mt-1 text-sm text-slate-500">Share the public admission form link to receive applications.</p><button type="button" onClick={()=>void copyLink()} className="mt-4 rounded-lg border border-indigo-200 px-3 py-2 text-sm font-bold text-indigo-700">Copy public link</button></td></tr>}</tbody></table></div><footer className="flex flex-col justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm sm:flex-row sm:items-center"><span className="text-slate-500">{total} application{total===1?'':'s'}{total?' total':''}</span><div className="flex items-center gap-3"><button type="button" disabled={page<=1||loading} onClick={()=>setPage(value=>Math.max(1,value-1))} className="rounded-lg border px-3 py-2 disabled:opacity-40">Previous</button><span>Page {page} of {pages}</span><button type="button" disabled={page>=pages||loading} onClick={()=>setPage(value=>Math.min(pages,value+1))} className="rounded-lg border px-3 py-2 disabled:opacity-40">Next</button></div></footer></section>
+
+    {selected&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-3 sm:p-6" onMouseDown={event=>{if(event.target===event.currentTarget)closeApplication();}}><section role="dialog" aria-modal="true" aria-labelledby="admission-dialog-title" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-100 bg-white px-5 py-4 sm:px-7"><div><p className="text-xs font-bold uppercase tracking-wider text-slate-400">Application {selected.applicationNo}</p><h2 id="admission-dialog-title" className="mt-1 text-xl font-black text-slate-900">Applicant details</h2></div><button type="button" onClick={closeApplication} aria-label="Close application" className="grid h-9 w-9 place-items-center rounded-lg border text-slate-500"><Glyph name="close"/></button></header><div className="space-y-6 p-5 sm:p-7">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">{selected.photo?<img src={selected.photo} alt={`${selected.name} applicant`} className="h-20 w-20 rounded-2xl object-cover"/>:<span className="grid h-20 w-20 place-items-center rounded-2xl bg-indigo-50 text-2xl font-black text-indigo-600">{selected.name.slice(0,1).toUpperCase()}</span>}<div className="min-w-0 flex-1"><h3 className="text-xl font-black">{selected.name}</h3><p className="mt-1 break-all text-sm text-slate-500">{selected.email} · {selected.mobile}</p><span className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-bold ring-1 ring-inset ${statusStyles[selected.status]||statusStyles.Pending}`}>{selected.status}</span></div><div className="text-sm text-slate-500"><Glyph name="calendar" className="mr-1 inline h-4 w-4"/>Applied {dateText(selected.appliedAt)}</div></div>
+      <div className="grid gap-x-6 gap-y-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2">{[['Gender',selected.gender],['Date of birth',dateText(selected.dateOfBirth)],['Course / batch',selected.batchName],['Address',selected.address],['Father’s name',selected.fatherName],['Mother’s name',selected.motherName],['Guardian phone',selected.guardianPhone],['Previous school',selected.previousSchool],['Last year percentage',selected.previousYearPercent===''||selected.previousYearPercent==null?'—':`${selected.previousYearPercent}%`],['Declaration accepted',selected.declarationAcceptedAt?new Date(selected.declarationAcceptedAt).toLocaleString('en-IN'):'—'],['Linked student',selected.studentId||selected.student?.id||'Not linked'],['Rejection reason',selected.rejectReason||'—']].map(([label,value])=><div key={label}><small className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400">{label}</small><span className="mt-1 block break-words text-sm font-semibold text-slate-700">{value||'—'}</span></div>)}</div>{selected.status==='Approved'&&(selected.studentId||selected.student?.id)&&<button type="button" onClick={()=>{setSelected(null);navigate('/admin/students');}} className="rounded-xl border border-indigo-200 px-4 py-2 text-sm font-bold text-indigo-700">Open student directory</button>}
+      <section><h3 className="text-sm font-extrabold text-slate-800">Status history</h3><ol className="mt-3 space-y-2 border-l-2 border-indigo-100 pl-4">{(selected.statusHistory||[]).map((event,index)=><li key={`${event.at}-${index}`} className="relative text-sm"><span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-4 ring-white"/><b>{event.status}</b><span className="ml-2 text-xs text-slate-400">{event.at?new Date(event.at).toLocaleString('en-IN'):''}</span>{event.reason&&<p className="text-xs text-slate-500">{event.reason}</p>}</li>)}{!selected.statusHistory?.length&&<li className="text-sm text-slate-400">No status changes yet.</li>}</ol></section>
+      <label className="block text-sm font-bold text-slate-700">Admin notes<textarea value={notes} onChange={event=>setNotes(event.target.value)} rows={3} maxLength={4000} className="mt-2 w-full rounded-xl border border-slate-300 p-3 font-normal outline-none focus:border-indigo-400" placeholder="Internal notes about this application"/></label>
+      {canReview&&selected.status!=='Rejected'&&<label className="block text-sm font-bold text-slate-700">Rejection reason<textarea value={rejectReason} onChange={event=>setRejectReason(event.target.value)} rows={2} maxLength={1000} className="mt-2 w-full rounded-xl border border-slate-300 p-3 font-normal outline-none focus:border-indigo-400" placeholder="Required when rejecting"/></label>}
+      <div className="flex flex-col-reverse gap-2 border-t pt-4 sm:flex-row sm:justify-between"><button type="button" disabled={busy} onClick={()=>void saveChanges()} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-50">Save notes</button><div className="flex flex-wrap justify-end gap-2">{selected.status==='Rejected'&&<button type="button" disabled={busy} onClick={()=>void saveChanges('Pending')} className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-bold text-blue-700 disabled:opacity-50">Reopen</button>}{canReview&&<><button type="button" disabled={busy} onClick={()=>void saveChanges('Under Review')} className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-bold text-blue-700 disabled:opacity-50">Mark under review</button><button type="button" disabled={busy} onClick={()=>void saveChanges('Rejected')} className="rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-bold text-rose-700 disabled:opacity-50">Reject</button><button type="button" disabled={busy} onClick={()=>void approve()} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{busy?'Saving…':'Approve & enroll'}</button></>}</div></div>
+    </div></section></div>}
+  </section>;
+}

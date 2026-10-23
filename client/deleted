@@ -1,0 +1,7 @@
+Landing-page files removed from the application:
+- src/pages/HomePage.tsx — landing page content and sections
+- src/components/CookieNotice.tsx — used only by the landing page
+- src/components/TrialDialog.tsx — used only by the landing page
+- src/services/publicForms.ts — trial/newsletter requests used only by the landing page
+
+The file list is retained here for reference; the root route now renders LoginPage directly.

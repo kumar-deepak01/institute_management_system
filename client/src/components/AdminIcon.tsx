@@ -1,0 +1,92 @@
+const paths: Record<string, string> = {
+  dashboard: 'M3 3h8v8H3V3zm10 0h8v5h-8V3zm0 7h8v11h-8V10zM3 13h8v8H3v-8z',
+  calendar: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v13c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 15H5V9h14v10zM7 11h3v3H7zm5 0h3v3h-3zm-5 4h3v3H7zm5 0h3v3h-3z',
+  chart: 'M5 10h4v10H5zm6-6h4v16h-4zm6 9h4v7h-4z',
+  person: 'M12 12c2.2 0 4-1.8 4-4s-1.8-4-4-4-4 1.8-4 4 1.8 4 4 4zm0 2c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z',
+  staff: 'M12 12c2.2 0 4-1.8 4-4s-1.8-4-4-4-4 1.8-4 4 1.8 4 4 4zm0 2c-3 0-7 1.5-7 4v2h14v-2c0-2.5-4-4-7-4zM3 2h18v20H3z',
+  addPerson: 'M15 12c2.2 0 4-1.8 4-4s-1.8-4-4-4-4 1.8-4 4 1.8 4 4 4zM5 10V7H3v3H0v2h3v3h2v-3h3v-2zm10 4c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z',
+  school: 'm12 3 11 6-11 6L1 9l11-6zm-7 9.2 7 3.8 7-3.8V17l-7 4-7-4v-4.8zM21 10h2v7h-2z',
+  book: 'M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h12v16H6z',
+  tag: 'M20.6 13.4 11 3.8C10.5 3.3 9.9 3 9.2 3H4c-1.1 0-2 .9-2 2v5.2c0 .7.3 1.3.8 1.8l9.6 9.6c.8.8 2 .8 2.8 0l5.4-5.4c.8-.8.8-2 0-2.8zM6.5 8A1.5 1.5 0 1 1 6.5 5a1.5 1.5 0 0 1 0 3z',
+  briefcase: 'M10 4h4l1 2h5c1.1 0 2 .9 2 2v11c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8c0-1.1.9-2 2-2h5l1-2zm0 2h4l-.5-1h-3L10 6zM4 9v10h16V9h-6v2h-4V9H4z',
+  inbox: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13h-4l-2 2h-2l-2-2H5V5h14v11z',
+  checklist: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H6v-2h3zm0-4H6v-2h3zm0-4H6V7h3zm9 8h-7v-2h7zm0-4h-7v-2h7zm0-4h-7V7h7z',
+  pencil: 'm3 17.3 11.7-11.7 3.7 3.7L6.7 21H3v-3.7zm16.7-7.9-1.4 1.4-3.7-3.7L16 5.7a1 1 0 0 1 1.4 0l2.3 2.3a1 1 0 0 1 0 1.4z',
+  chat: 'M12 3C6.5 3 2 6.6 2 11c0 2.3 1.2 4.4 3.2 5.8L4 21l5-2.1c1 .3 2 .4 3 .4 5.5 0 10-3.6 10-8.3S17.5 3 12 3zm-4 9a1.3 1.3 0 1 1 0-2.6A1.3 1.3 0 0 1 8 12zm4 0a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6zm4 0a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6z',
+  eventOff: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v13c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 12.6-1.4 1.4-3.6-3.6-3.6 3.6L8 16.6l3.6-3.6L8 9.4 9.4 8l3.6 3.6L16.6 8 18 9.4l-3.6 3.6 2.6 2.6z',
+  quiz: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H6v-2h3zm0-4H6v-2h3zm0-4H6V7h3zm7 8a2 2 0 0 1-2-2h2v2zm1-4h-2v-2c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2h-2a4 4 0 1 1 6 3.5V13z',
+  edit: 'M3 17.3V21h3.7L18.4 9.3l-3.7-3.7L3 17.3zm17.7-10.6a1 1 0 0 0 0-1.4l-2-2a1 1 0 0 0-1.4 0l-1.8 1.8 3.7 3.7 1.5-2.1z',
+  report: 'M5 3h10l5 5v13H5c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2zm9 1v5h5M7 17h2v-4H7zm4 0h2V9h-2zm4 0h2v-6h-2z',
+  verified: 'M12 2 9.8 4.2 6.7 4l-.8 3-2.6 1.7 1 2.9-1 2.9L6 16.2l.8 3 3.1-.2L12 21l2.2-2.2 3.1.2.8-3 2.6-1.7-1-2.9 1-2.9-2.6-1.7-.8-3-3.1.2L12 2zm-1 13-3-3 1.4-1.4L11 12.2l3.6-3.6L16 10l-5 5z',
+  video: 'M17 10.5V7c0-1.1-.9-2-2-2H5C3.9 5 3 5.9 3 7v10c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-3.5l4 4v-11l-4 4z',
+  download: 'M12 3a8 8 0 0 0-7.9 7A5.5 5.5 0 0 0 5.5 21h12a4.5 4.5 0 0 0 .6-9A6.1 6.1 0 0 0 12 3zm1 4v6h3l-4 4-4-4h3V7h2z',
+  live: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM4.9 5.6l1.4 1.4a7 7 0 0 0 0 10l-1.4 1.4a9 9 0 0 1 0-12.8zm14.2 0a9 9 0 0 1 0 12.8l-1.4-1.4a7 7 0 0 0 0-10l1.4-1.4zM2 2.8l1.4 1.4a11 11 0 0 0 0 15.6L2 21.2a13 13 0 0 1 0-18.4zm20 0a13 13 0 0 1 0 18.4l-1.4-1.4a11 11 0 0 0 0-15.6L22 2.8z',
+  payment: 'M21 4H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4H3V6h18v2zm-2 9h-5v-2h5v2zM12 13c0 2.2-1.8 4-4 4s-4-1.8-4-4 1.8-4 4-4 4 1.8 4 4zm-4-2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
+  grid: 'M3 3h8v8H3zm10 0h8v5h-8zm0 7h8v11h-8zM3 13h8v8H3z',
+  clock: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm1-13h-2v6l5 3 1-1.7-4-2.3V7z',
+  bell: 'M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.8V3a1.5 1.5 0 0 0-3 0v1.2A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2z',
+  moon: 'M20.8 15.2A8.7 8.7 0 0 1 8.8 3.2 9 9 0 1 0 20.8 15.2z',
+  sun: 'M12 4V2m0 20v-2m8-8h2M2 12h2m13.66-5.66 1.42-1.42M4.92 19.08l1.42-1.42m11.32 0 1.42 1.42M4.92 4.92l1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z',
+  shield: 'M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3zm0 4a2 2 0 0 1 2 2v3h-4V8a2 2 0 0 1 2-2zm-3 7h6v4H9v-4z',
+  export: 'M5 3h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2zm6 2v8H8l4 4 4-4h-3V5h-2z',
+  calculator: 'M5 2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2zm2 3v4h10V5H7zm0 7v2h3v-2H7zm5 0v2h3v-2h-3zm5 0v6h-2v-6h2zM7 16v2h3v-2H7zm5 0v2h3v-2h-3z',
+  trend: 'M3 19h18v2H1V3h2v16zm2-3 5-6 4 3 6-8 1.6 1.2-7.2 9.6-4-3.1L6.5 17 5 16z',
+  staffCheck: 'M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.3 0-8 1.7-8 5v2h11v-2c0-1.4.7-2.7 1.8-3.6A13 13 0 0 0 10 14zm8-2 2 2 4-4-1.4-1.4-2.6 2.6-1-1-1 1.8z',
+  fingerprint: 'M12 2a8 8 0 0 0-8 8v2h2v-2a6 6 0 0 1 12 0v2h2v-2a8 8 0 0 0-8-8zm0 4a4 4 0 0 0-4 4v4c0 3-1 5-2 7l1.8 1c1.4-2.4 2.2-5 2.2-8v-4a2 2 0 1 1 4 0v5c0 2.3.5 4.4 1.5 6.3l1.8-1c-.9-1.6-1.3-3.3-1.3-5.3v-5a4 4 0 0 0-4-4z',
+  filter: 'M3 4h18l-7 8v6l-4 2v-8L3 4z',
+  bot: 'M12 2a2 2 0 0 1 2 2v1h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h3V4a2 2 0 0 1 2-2zm-4 8a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm8 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-8 6v2h8v-2H8z',
+  document: 'M6 2h8l5 5v15H6c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2zm7 1v5h5M8 12h8v2H8zm0 4h8v2H8z',
+  social: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 16h-2v-6H9v-2h2V8a3 3 0 0 1 3-3h2v2h-2a1 1 0 0 0-1 1v2h3l-.5 2H13v6z',
+  gift: 'M20 7h-2.2c.7-.6 1.2-1.4 1.2-2.3A2.7 2.7 0 0 0 16.3 2c-1.5 0-2.7 1.1-4.3 3.1C10.4 3.1 9.2 2 7.7 2A2.7 2.7 0 0 0 5 4.7c0 .9.5 1.7 1.2 2.3H4c-1.1 0-2 .9-2 2v3h9V9h2v3h9V9c0-1.1-.9-2-2-2zM2 14h9v8H4c-1.1 0-2-.9-2-2v-6zm11 0h9v6c0 1.1-.9 2-2 2h-7v-8z',
+  megaphone: 'M3 10v4c0 1.1.9 2 2 2h2l2 5h3l-2-5h2l8 4V4l-8 4H5c-1.1 0-2 .9-2 2zm16-2v8l-6-3V11l6-3z',
+  bolt: 'M13 2 4 14h6l-1 8 11-13h-7l1-7z',
+  mail: 'M2 5c0-1.1.9-2 2-2h16c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V5zm2 1v1l8 5 8-5V6l-8 5-8-5zm0 4v9h16v-9l-8 5-8-5z',
+  form: 'M5 3h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2zm2 4v2h2V7H7zm4 0v2h7V7h-7zm-4 4v2h2v-2H7zm4 0v2h7v-2h-7zm-4 4v2h2v-2H7zm4 0v2h7v-2h-7z',
+  columns: 'M3 3h18v18H3V3zm2 2v14h4V5H5zm6 0v14h2V5h-2zm4 0v14h4V5h-4z',
+  people: 'M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.7 0-6 1.3-6 4v2h12v-2c0-2.7-3.3-4-6-4zm8 0c-.4 0-.9 0-1.4.1 1.5.9 2.4 2.2 2.4 3.9v2h5v-2c0-2.7-3.3-4-6-4z',
+  rupee: 'M5 3h14v2H5zm0 4h14v2h-5a5 5 0 0 1-4 5l6 7h-3l-7-8v-2h2a3 3 0 0 0 3-2H5V7z',
+  truck: 'M3 4h12v11h2l2-5h3l2 3v6h-2a3 3 0 0 1-6 0H9a3 3 0 0 1-6 0H1V6c0-1.1.9-2 2-2zm2 15a1 1 0 1 0 2 0 1 1 0 0 0-2 0zm11 0a1 1 0 1 0 2 0 1 1 0 0 0-2 0z',
+  home: 'm12 3 10 9h-3v9h-6v-6h-2v6H5v-9H2l10-9z',
+  boxes: 'M12 2 3 7v10l9 5 9-5V7l-9-5zm0 2.3 5.6 3.1L12 10.5 6.4 7.4 12 4.3zM5 9.1l6 3.3v6.9l-6-3.3V9.1zm14 6.9-6 3.3v-6.9l6-3.3V16z',
+  coffee: 'M4 8h14v8a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8zm14 2v5h1a2 2 0 0 0 0-4h-1zM6 2c2 1 2 2 0 3s-2 2 0 3c-4-1-4-4 0-6zm6 0c2 1 2 2 0 3s-2 2 0 3c-4-1-4-4 0-6z',
+  trophy: 'M7 3h10v3h4v3c0 3-2 5-5 5-.7 1.5-1.8 2.5-3 3v2h4v2H7v-2h4v-2c-1.2-.5-2.3-1.5-3-3-3 0-5-2-5-5V6h4V3zm0 5H5v1c0 1.5.7 2.5 2.1 2.9A9 9 0 0 1 7 8zm10 0a9 9 0 0 1-.1 3.9C18.3 11.5 19 10.5 19 9V8h-2z',
+  settings: 'M19.4 13a7.8 7.8 0 0 0 0-2l2-1.6-2-3.5-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 2.9a8 8 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.6a7.8 7.8 0 0 0 0 2l-2 1.6 2 3.5 2.4-1a8 8 0 0 0 1.7 1L11 22h4l.4-2.9a8 8 0 0 0 1.7-1l2.4 1 2-3.5-2.1-1.6zM13 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6z',
+  building: 'M4 2h16v20H4V2zm3 3v2h2V5H7zm4 0v2h2V5h-2zm4 0v2h2V5h-2zM7 9v2h2V9H7zm4 0v2h2V9h-2zm4 0v2h2V9h-2zm-8 4v2h2v-2H7zm4 0v2h2v-2h-2zm4 0v2h2v-2h-2zm-2 8v-4h-2v4h2z',
+  mobile: 'M7 2h10c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2zm0 3v12h10V5H7zm4 14h2v1h-2z',
+  puzzle: 'M20 11h-2V8a2 2 0 0 0-2-2h-3V4a2 2 0 1 0-4 0v2H6a2 2 0 0 0-2 2v3H2a2 2 0 1 0 0 4h2v3a2 2 0 0 0 2 2h3v-2a2 2 0 1 1 4 0v2h3a2 2 0 0 0 2-2v-3h2a2 2 0 1 0 0-4z',
+  chip: 'M9 2h2v3h2V2h2v3h2a2 2 0 0 1 2 2v2h3v2h-3v2h3v2h-3v2a2 2 0 0 1-2 2h-2v3h-2v-3h-2v3H9v-3H7a2 2 0 0 1-2-2v-2H2v-2h3v-2H2v-2h3V7a2 2 0 0 1 2-2h2V2zm-1 6v8h8V8H8z',
+  menu: 'M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3z',
+  search: 'M10.5 3a7.5 7.5 0 1 0 4.6 13.4l4.8 4.8 1.4-1.4-4.8-4.8A7.5 7.5 0 0 0 10.5 3zm0 2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11z',
+  close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5z',
+  star: 'm12 2 2.9 6 6.6 1-4.8 4.7 1.1 6.7-5.8-3.2-5.8 3.2 1.1-6.7L2.5 9l6.6-1L12 2z',
+  heart: 'M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11z',
+  phone: 'M6.6 2h3l1.5 5-2 1.5a15 15 0 0 0 6.4 6.4l1.5-2 5 1.5v3a3 3 0 0 1-3.3 3A17 17 0 0 1 3.6 5.3 3 3 0 0 1 6.6 2z',
+  play: 'M7 4v16l13-8L7 4z',
+  check: 'm9 16.2-4.2-4.2L3.4 13.4 9 19l12-12-1.4-1.4z',
+  warning: 'M12 2 1 21h22L12 2zm-1 7h2v6h-2zm0 8h2v2h-2z',
+  dot: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
+};
+
+const aliases: Record<string, string> = {
+  idCard: 'student', event: 'calendar', eventOff: 'eventOff', quiz: 'checklist', edit: 'pencil', report: 'chart', verified: 'shield',
+  payment: 'rupee', staffCheck: 'staff', export: 'document', calculator: 'grid', trend: 'chart', fingerprint: 'chip', filter: 'grid',
+  bot: 'settings', social: 'people', gift: 'verified', megaphone: 'live', bolt: 'trend', form: 'checklist', columns: 'grid',
+  rupee: 'payment', boxes: 'grid', coffee: 'home', trophy: 'verified',
+};
+
+export default function AdminIcon({ name, className }: { name: string; className: string }) {
+  const path = paths[name] || paths[aliases[name]] || paths.grid;
+  return <svg aria-hidden="true" viewBox="0 0 24 24" className={className} fill="currentColor"><path d={path} /></svg>;
+}
+
+const glyphNames: Record<string, string> = {
+  '▦': 'dashboard', '▤': 'checklist', '◷': 'clock', '₹': 'rupee', '◉': 'live', '▣': 'checklist', '▥': 'chart',
+  '⌕': 'search', '♧': 'bell', '⚙': 'settings', '☰': 'menu', '＋': 'addPerson', '⌁': 'chart', '✦': 'star',
+  '▱': 'document', '◈': 'filter', '✉': 'mail', '♡': 'heart', '☆': 'star', '×': 'close', '✎': 'pencil',
+  '☏': 'phone', '♙': 'person', '▷': 'play',
+  '●': 'dot', '✓': 'check', '⚠': 'warning', '+': 'addPerson',
+};
+
+export function GlyphIcon({ glyph, className }: { glyph: string; className: string }) {
+  return <AdminIcon name={glyphNames[glyph] || 'grid'} className={className} />;
+}

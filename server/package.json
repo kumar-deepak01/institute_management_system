@@ -1,0 +1,42 @@
+{
+  "name": "my-jee-mentor-server",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "migrate:sheets": "node scripts/migrate-google-sheets-data.js",
+    "create:admin": "node scripts/create-admin.js",
+    "check:login": "node scripts/check-login.js",
+    "unlock:account": "node scripts/unlock-account.js",
+    "check:staff": "node scripts/check-staff-sql.js",
+    "check:admissions": "node scripts/check-admissions-sql.js",
+    "check:curriculum": "node scripts/check-curriculum-sql.js",
+    "check:academics": "node scripts/check-academics-sql.js",
+    "check:content": "node scripts/check-content-sql.js",
+    "check:finance": "node scripts/check-finance-sql.js",
+    "verify:schema": "node scripts/verify-schema.js",
+    "test": "node --test",
+    "autopush": "node scripts-auto-push.js",
+    "check:text-encoding": "node scripts/check-text-encoding.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "file-type": "^22.2.0",
+    "googleapis": "^186.0.0",
+    "helmet": "^8.3.0",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.2.0",
+    "pg": "^8.23.1",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
+  }
+}

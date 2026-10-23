@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#eef2f9" />
+    <meta name="description" content="My JEE Mentor institute workspace" />
+    <script>
+      (() => {
+        if (!/^\/teacher(?:\/|$)/.test(window.location.pathname)) return;
+        const root = document.documentElement;
+        root.dataset.teacherRoute = 'true';
+        let theme = 'light';
+        try {
+          const saved = window.localStorage.getItem('teacher-theme');
+          if (saved === 'dark' || saved === 'light') theme = saved;
+          else theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        } catch {
+          try { theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch { /* Keep light mode when unavailable. */ }
+        }
+        root.dataset.teacherTheme = theme;
+      })();
+    </script>
+    <link rel="icon" href="/src/assets/mainlogo.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <title>Log in | My JEE Mentor</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,33 @@
+import { apiRequest } from './api';
+
+export type Lookup = { id: string; key?: string; name: string; courseId?: string };
+export type AcademicLookups = { batches: Lookup[]; subjects: Lookup[]; teachers: Lookup[]; students?: Lookup[]; staff?: Lookup[]; schemaPending?: boolean };
+export type AttendanceStudent = { studentKey: string; admissionNumber: string; name: string; batchId: string; batchName: string; status: string | null; photoUrl?: string | null };
+export type AttendanceSummary = { present: number; absent: number; late: number; holiday: number; leave: number; total: number; marked: number; rate: number };
+export type AttendanceResponse = { students: AttendanceStudent[]; date: string; batchId: string; summary: AttendanceSummary; schemaPending?: boolean };
+export type RecordItem = Record<string, any> & { id: string; status?: string; createdAt?: string };
+async function csrf() { const result = await apiRequest<{ csrfToken: string }>('/api/auth/csrf'); return { 'X-CSRF-Token': result.csrfToken }; }
+export const getAttendanceLookups = () => apiRequest<AcademicLookups>('/api/admin/academics/attendance/lookups');
+export const getAttendance = (batchId: string, date: string) => apiRequest<AttendanceResponse>(`/api/admin/academics/attendance?${new URLSearchParams({ batchId, date })}`);
+export const saveAttendance = async (batchId: string, date: string, records: Array<{ studentKey: string; status: string }>) => apiRequest<{ saved: number }>('/api/admin/academics/attendance', { method: 'POST', headers: await csrf(), body: { batchId, date, records } });
+export const bulkAttendance = async (input: { batchId: string; fromDate: string; toDate: string; status: string; studentKeys: string[] }) => apiRequest<{ saved: number }>('/api/admin/academics/attendance/bulk', { method: 'POST', headers: await csrf(), body: input });
+export const getAttendanceReport = (filters: { from: string; to: string; batchId: string; studentKey: string }) => apiRequest<{ records: Array<RecordItem & { name: string; admissionNumber: string; batchName: string; date: string }>; hasMore: boolean }>('/api/admin/academics/attendance/report?' + new URLSearchParams(filters));
+export const timetableLookups = () => apiRequest<AcademicLookups>('/api/admin/academics/timetable/lookups');
+export const getTimetable = (batchId = '', staffKey = '') => apiRequest<{ classes: RecordItem[]; holidays: RecordItem[]; approvedStaffLeave: RecordItem[]; availability: RecordItem[]; schemaPending?: boolean }>(`/api/admin/academics/timetable?${new URLSearchParams({ batchId, staffKey })}`);
+export const getTodayClasses = () => apiRequest<{ total: number; classes: RecordItem[]; schemaPending?: boolean }>('/api/admin/academics/timetable/today');
+export const saveTimetableClass = async (record: Record<string, any>) => apiRequest<{ record: RecordItem; availabilityWarning?: boolean }>('/api/admin/academics/timetable', { method: 'POST', headers: await csrf(), body: record });
+export const deleteTimetableClass = async (id: string) => apiRequest<{ ok: boolean }>(`/api/admin/academics/timetable/${encodeURIComponent(id)}`, { method: 'DELETE', headers: await csrf() });
+export const saveTeacherAvailability = async (record: Record<string, any>) => apiRequest('/api/admin/academics/timetable/availability', { method: 'POST', headers: await csrf(), body: record });
+export const assignSubstitute = async (id: string, staffKey: string, date: string) => apiRequest(`/api/admin/academics/timetable/${encodeURIComponent(id)}/substitute`, { method: 'POST', headers: await csrf(), body: { staffKey, date } });
+export const getLeaveLookups = () => apiRequest<{ holidays: RecordItem[]; types: RecordItem[]; balances: RecordItem[]; students: Lookup[]; staff: Lookup[]; schemaPending?: boolean }>('/api/admin/academics/leave/lookups');
+export const getLeaveRequests = (options: { page: number; status: string; role: string }) => apiRequest<{ records: RecordItem[]; pending: number; approved: number; total: number; page: number; limit: number; pages: number; schemaPending?: boolean }>(`/api/admin/academics/leave?${new URLSearchParams(Object.fromEntries(Object.entries({ ...options, limit: '24' }).map(([key,value])=>[key,String(value)])))}`);
+export const getRegularizations = (status: string) => apiRequest<{ records: RecordItem[]; total: number }>(`/api/admin/academics/leave/regularizations?${new URLSearchParams({ status })}`);
+export const createHoliday = async (record: Record<string, any>) => apiRequest('/api/admin/academics/leave/holiday', { method: 'POST', headers: await csrf(), body: record });
+export const createLeaveType = async (record: Record<string, any>) => apiRequest('/api/admin/academics/leave/type', { method: 'POST', headers: await csrf(), body: record });
+export const createLeaveBalance = async (record: Record<string, any>) => apiRequest('/api/admin/academics/leave/balance', { method: 'POST', headers: await csrf(), body: record });
+export const reviewLeave = async (section: 'requests' | 'regularizations', id: string, status: string, adminNote = '') => apiRequest(`/api/admin/academics/leave/${section}/${encodeURIComponent(id)}`, { method: 'PATCH', headers: await csrf(), body: { status, adminNote } });
+export const deleteLeaveRecord = async (section: 'holidays' | 'types' | 'balances', id: string) => apiRequest(`/api/admin/academics/leave/${section}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: await csrf() });
+export const doubtsLookups = () => apiRequest<Pick<AcademicLookups, 'subjects' | 'teachers'>>('/api/admin/academics/doubts/lookups');
+export const getDoubts = (options: { q: string; subjectId: string; staffKey: string; status: string; page: number }) => apiRequest<{ records: RecordItem[]; open: number; answered: number; total: number; filteredTotal: number; page: number; pages: number; schemaPending?: boolean }>(`/api/admin/academics/doubts?${new URLSearchParams(Object.fromEntries(Object.entries({ ...options, limit: '24' }).map(([key,value])=>[key,String(value)])))}`);
+export const updateDoubt = async (id: string, record: Record<string, any>) => apiRequest<{ record: RecordItem }>(`/api/admin/academics/doubts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: await csrf(), body: record });
+export const replyToDoubt = async (id: string, message: string) => apiRequest<{ record: RecordItem }>(`/api/admin/academics/doubts/${encodeURIComponent(id)}/replies`, { method: 'POST', headers: await csrf(), body: { message } });

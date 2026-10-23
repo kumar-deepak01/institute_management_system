@@ -1,0 +1,10 @@
+import { useEffect, useState } from 'react';
+import { getPtmNotices, PtmNotice } from '../services/ptm';
+
+export default function PtmMeetingNotices() {
+  const [meetings,setMeetings]=useState<PtmNotice[]>([]);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{let active=true;getPtmNotices().then(result=>{if(active)setMeetings(result.meetings||[]);}).catch(()=>{if(active)setMeetings([]);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[]);
+  if(loading||!meetings.length)return null;
+  return <section aria-label="Parent teacher meeting notices" className="mb-6 rounded-2xl border border-blue-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-extrabold text-blue-800">Parent Teacher Meetings</h2><span className="text-xs text-slate-500">{meetings.length} notice{meetings.length===1?'':'s'}</span></div><div className="mt-4 grid gap-3">{meetings.map(item=><article key={item.id} className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{item.title}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${item.status==='scheduled'?'bg-emerald-100 text-emerald-800':'bg-slate-200 text-slate-600'}`}>{item.status==='scheduled'?'Scheduled':'Cancelled'}</span></div><p className="mt-1 text-sm text-slate-600">{item.batch_name} · {item.teacher_name} · {item.provider.replace('_',' ')}</p><p className="mt-1 text-xs text-slate-500">{new Date(item.scheduled_at).toLocaleString()} · {item.duration_minutes} minutes</p>{item.notes&&<p className="mt-2 text-sm text-slate-600">{item.notes}</p>}</div>{item.status==='scheduled'&&item.meeting_url&&(item.provider==='in_person'?<span className="text-sm font-semibold text-slate-600">In-person meeting</span>:<a href={item.meeting_url} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-bold text-white">Join meeting</a>)}</article>)}</div></section>;
+}
