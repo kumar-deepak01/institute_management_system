@@ -1,0 +1,220 @@
+/* My Classroom lamp login - all selectors are prefixed "ll-" so nothing else in the app is affected. */
+
+.ll-root {
+  color-scheme: dark;
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  font-family: Inter, system-ui, sans-serif;
+  color: #e8e8ec;
+  background: radial-gradient(900px 600px at 25% 55%, #222228, #0e0e11);
+  transition: background 0.8s;
+}
+.ll-root.ll-on {
+  background: radial-gradient(900px 600px at 25% 55%, #2a2420, #0e0e11);
+}
+.ll-serif {
+  font-family: "Playfair Display", Georgia, serif;
+}
+
+/* header */
+.ll-head { opacity: 0.35; transition: opacity 0.7s; }
+.ll-on .ll-head { opacity: 1; }
+
+/* lamp */
+.ll-shade {
+  background: #c9c9c2;
+  transition: all 0.5s;
+}
+.ll-on .ll-shade {
+  background: #ffd48a;
+  box-shadow: 0 0 18px 6px rgba(245, 184, 74, 0.65), 0 0 60px 14px rgba(245, 184, 74, 0.3);
+}
+.ll-cone {
+  opacity: 0;
+  transition: opacity 0.7s;
+  clip-path: polygon(41% 0, 59% 0, 100% 100%, 0 100%);
+  background: linear-gradient(180deg, rgba(245, 184, 74, 0.7), rgba(245, 184, 74, 0.12) 70%, transparent);
+}
+.ll-cone2 {
+  clip-path: polygon(46% 0, 54% 0, 78% 100%, 22% 100%);
+  background: linear-gradient(180deg, rgba(255, 226, 160, 0.5), transparent 85%);
+}
+.ll-on .ll-cone { opacity: 1; }
+.ll-floorglow {
+  opacity: 0;
+  transition: opacity 0.7s;
+  background: radial-gradient(closest-side, rgba(245, 184, 74, 0.35), transparent);
+}
+.ll-on .ll-floorglow { opacity: 1; }
+
+/* switch */
+.ll-switch {
+  touch-action: none;
+  background: linear-gradient(180deg, #2c2c31, #16161a);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.ll-knob { background: #bdbdb8; top: 6px; transition: all 0.35s; }
+.ll-on .ll-knob { background: #f5b84a; top: 44px; box-shadow: 0 0 12px 3px rgba(245, 184, 74, 0.8); }
+
+/* helper: emoji, dashed trail and hanging sign (visible/animated only while light is OFF) */
+.ll-emo { position: absolute; left: 0; top: 0; width: 60px; height: 230px; pointer-events: none; }
+.ll-face {
+  position: absolute; left: -4px; top: 108px; width: 64px; height: 64px;
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.55));
+  animation: ll-hop 1.1s ease-in-out infinite;
+}
+.ll-trail {
+  position: absolute; left: 21px; top: 168px;
+  filter: drop-shadow(0 0 6px rgba(245, 184, 74, 0.7));
+  transition: opacity 0.4s;
+}
+.ll-trail line { animation: ll-flow 0.7s linear infinite; }
+.ll-on .ll-face { animation: none; }
+.ll-on .ll-trail { opacity: 0; }
+.ll-on .ll-trail line { animation: none; }
+.ll-sign { position: absolute; left: -26px; top: 14px; width: 108px; height: 90px; transition: opacity 0.6s, transform 0.6s; }
+.ll-on .ll-sign { opacity: 0; transform: translateY(-26px); }
+.ll-sign-in { width: 108px; height: 90px; transform-origin: 54px 0; animation: ll-sway 3.2s ease-in-out infinite; }
+.ll-board {
+  position: absolute; left: 0; top: 36px; width: 108px; height: 46px; border-radius: 10px;
+  text-align: center; line-height: 1.1; padding-top: 7px;
+  background: linear-gradient(180deg, #2d2724, #1a1715);
+  border: 1px solid rgba(245, 184, 74, 0.55);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.55), 0 0 18px rgba(245, 184, 74, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.ll-board small { display: block; font-size: 9px; letter-spacing: 0.28em; color: #cbb88f; }
+.ll-board b { display: block; font-size: 15px; letter-spacing: 0.12em; color: #ffc65c; text-shadow: 0 0 10px rgba(245, 184, 74, 0.8); }
+
+/* card */
+.ll-card {
+  opacity: 0;
+  transform: translateY(18px) scale(0.97);
+  pointer-events: none;
+  transition: all 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 0 60px rgba(245, 184, 74, 0.06);
+}
+.ll-on .ll-card { opacity: 1; transform: none; pointer-events: auto; }
+.ll-field {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: border 0.2s, background 0.2s;
+}
+.ll-field:focus-within { border-color: rgba(139, 124, 246, 0.7); background: rgba(139, 124, 246, 0.08); }
+.ll-btn {
+  background: linear-gradient(135deg, #9a85f7, #6d4fd8);
+  box-shadow: 0 8px 24px rgba(109, 79, 216, 0.35);
+  transition: filter 0.2s;
+  will-change: transform;
+}
+.ll-btn:hover { filter: brightness(1.1); }
+
+/* login button slot (the "box" the button pops out of) */
+.ll-slot { border-radius: 12px; border: 1px dashed transparent; transition: background 0.4s, border-color 0.4s, box-shadow 0.4s; }
+.ll-out .ll-slot {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.65);
+}
+
+/* wrong-login effects */
+.ll-shake { animation: ll-shake 0.45s; }
+.ll-flick .ll-cone, .ll-flick .ll-shade { animation: ll-flick 0.5s; }
+
+@keyframes ll-shake { 20%, 60% { transform: translateX(-9px); } 40%, 80% { transform: translateX(9px); } }
+@keyframes ll-flick { 0%, 100% { opacity: 1; } 25% { opacity: 0.3; } 50% { opacity: 0.9; } 75% { opacity: 0.2; } }
+@keyframes ll-sway { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+@keyframes ll-hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes ll-flow { to { stroke-dashoffset: -22; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ll-face, .ll-trail line, .ll-sign-in, .ll-shake, .ll-flick .ll-cone, .ll-flick .ll-shade { animation: none; }
+}
+
+/* ==========================================================================
+   Layout + base styles (plain CSS - no Tailwind needed, works in any project)
+   ========================================================================== */
+.ll-root *, .ll-root *::before, .ll-root *::after { box-sizing: border-box; }
+.ll-root :where(h1, h2, p) { margin: 0; font-weight: inherit; }
+.ll-root :where(svg) { display: block; }
+.ll-root :where(a) { text-decoration: none; }
+.ll-root :where(button, input) { font: inherit; color: inherit; margin: 0; }
+.ll-root :where(button) { cursor: pointer; border: 0; background: none; padding: 0; }
+
+/* header */
+.ll-head { text-align: center; padding: 32px 16px 0; position: relative; z-index: 20; }
+.ll-eyebrow { font-size: 11px; letter-spacing: 0.35em; color: rgba(252, 211, 77, 0.8); font-weight: 500; }
+.ll-title { font-size: 30px; line-height: 1.2; margin-top: 8px; }
+
+/* section */
+.ll-section {
+  flex: 1 1 0%;
+  width: 100%;
+  max-width: 64rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 0 16px 40px;
+}
+
+/* lamp column */
+.ll-lampcol { position: relative; width: 300px; height: 400px; flex-shrink: 0; }
+.ll-floorglow { position: absolute; bottom: 10px; left: 20px; width: 260px; height: 90px; }
+.ll-cone { position: absolute; top: 52px; left: 0; width: 300px; height: 340px; }
+.ll-pole { position: absolute; left: 149px; top: 50px; bottom: 18px; width: 2px; background: rgba(113, 113, 122, 0.7); }
+.ll-base { position: absolute; left: 110px; bottom: 14px; width: 80px; height: 6px; border-radius: 4px; background: #3f3f46; }
+.ll-shade { position: absolute; top: 40px; left: 55px; width: 190px; height: 14px; border-radius: 50%; }
+.ll-switchwrap { position: absolute; left: 8px; top: 212px; width: 40px; height: 74px; }
+.ll-switch { position: relative; width: 40px; height: 74px; border-radius: 9999px; cursor: pointer; }
+.ll-knob { position: absolute; left: 11px; width: 18px; height: 18px; border-radius: 9999px; }
+
+/* card */
+.ll-card { position: relative; width: 100%; max-width: 380px; border-radius: 28px; padding: 28px; }
+.ll-thread { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 1; }
+.ll-welcome { font-size: 28px; text-align: center; color: #e4e4e7; }
+.ll-sub { text-align: center; font-size: 13px; color: #a1a1aa; margin: 4px 0 24px; }
+
+.ll-field { display: flex; align-items: center; gap: 12px; border-radius: 12px; padding: 0 16px; height: 48px; }
+.ll-field-gap { margin-bottom: 12px; }
+.ll-input { flex: 1 1 0%; min-width: 0; width: 100%; background: transparent; border: 0; outline: none; font-size: 14px; color: #e8e8ec; }
+.ll-input::placeholder { color: #71717a; }
+.ll-eye { color: #a1a1aa; display: flex; align-items: center; }
+.ll-eye:hover { color: #e4e4e7; }
+
+.ll-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; font-size: 13px; }
+.ll-remember { display: flex; align-items: center; gap: 8px; color: #a1a1aa; cursor: pointer; }
+.ll-check { width: 16px; height: 16px; accent-color: #7c6af0; margin: 0; }
+.ll-link { color: #8b7cf6; }
+.ll-link:hover { text-decoration: underline; }
+
+.ll-msg { font-size: 13px; text-align: center; min-height: 20px; margin-top: 12px; }
+.ll-msg-ok { color: #7ee0a0; }
+.ll-msg-err { color: #ff8a8a; }
+
+.ll-slot { height: 48px; margin-top: 4px; }
+.ll-btn { position: relative; width: 100%; height: 48px; border-radius: 12px; font-weight: 600; color: #fff; font-size: 15px; }
+
+.ll-foot { text-align: center; font-size: 13px; color: #a1a1aa; margin-top: 20px; line-height: 1.6; }
+.ll-sep { margin: 0 8px; color: #52525b; }
+
+/* tablet / desktop */
+@media (min-width: 768px) {
+  .ll-title { font-size: 36px; }
+  .ll-section { flex-direction: row; gap: 64px; }
+  .ll-lampcol { height: 460px; }
+  .ll-cone { height: 395px; }
+  .ll-card { padding: 32px; }
+}

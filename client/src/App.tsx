@@ -2,7 +2,6 @@ import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { HelmetProvider } from 'react-helmet-async';
 import PasswordChangeGate from './components/PasswordChangeGate';
-import PublicLayout from './components/PublicLayout';
 import LoginPage from './pages/LoginPage';
 
 const FeaturesPage = lazy(() => import('./pages/FeaturesPage'));
@@ -100,16 +99,14 @@ export default function App() {
   return <HelmetProvider>
     <RouteEffects />
     <Routes>
-      <Route element={<PublicLayout />}>
-        <Route path="/" element={<LoginPage />} />
-        <Route path="/index.html" element={<LoginPage />} />
-        <Route path="/features" element={<Suspense fallback={<RouteLoading />}><FeaturesPage /></Suspense>} />
-        <Route path="/features.html" element={<Suspense fallback={<RouteLoading />}><FeaturesPage /></Suspense>} />
-      </Route>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/login.html" element={<LoginPage />} />
-      <Route path="/portal" element={<LoginPage />} />
-      <Route path="/portal.html" element={<LoginPage />} />
+      <Route path="/" element={<LoginPage />} />
+      <Route path="/index.html" element={<LoginPage />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="/login.html" element={<Navigate to="/" replace />} />
+      <Route path="/portal" element={<Navigate to="/" replace />} />
+      <Route path="/portal.html" element={<Navigate to="/" replace />} />
+      <Route path="/features" element={<Suspense fallback={<RouteLoading />}><FeaturesPage /></Suspense>} />
+      <Route path="/features.html" element={<Suspense fallback={<RouteLoading />}><FeaturesPage /></Suspense>} />
       <Route path="/change-password" element={<Suspense fallback={<RouteLoading />}><ChangePasswordPage /></Suspense>} />
       <Route path="/admin/*" element={<Protected><AdminPage /></Protected>} />
       <Route path="/admin.html" element={<Protected><AdminPage /></Protected>} />
