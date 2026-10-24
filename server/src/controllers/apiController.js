@@ -92,7 +92,6 @@ function emptyDashboardPayload() {
     'Send a broadcast', 'Review homework', 'Set up payroll', 'Set institute details',
   ];
   return {
-    plan: 'Plan not configured',
     setup: { completed: 0, total: labels.length, steps: labels.map(label => ({ label, description: 'Dashboard data could not be assembled.', complete: false })) },
     stats: { students: 0, activeStudents: 0, attendancePresent: 0, attendanceTotal: 0, attendanceRate: null, feesCollected: 0, paymentsThisMonth: 0, pendingAdmissions: 0, staff: 0, feePending: 0, atRisk: 0 },
     enrollment: [], feeCollection: [], demographics: { gender: [], states: [], cities: [] },
@@ -263,17 +262,12 @@ async function api(req, res, url) {
         return { rows: [] };
       });
       const projectedPaymentDate = alias => `coalesce(${alias}.paid_at, case when ${alias}.record_json->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' then left(${alias}.record_json->>'date',10)::date::timestamptz end)`;
-      const [students, activeStudents, attendance, attendanceRecords, payments, admissions, courses, batches, academicYears, assignments, monthlyEnrollments, monthlyFees, settings, staff, pendingFees, recentTransactions, recentAdmissions, demographics, stateDemographics, cityDemographics, studentBirthdays, staffBirthdays, atRiskStudents, activeHomework, todayAttendance, subjects, topics, feeRecords, sentMessages, submissions, payroll] = (await Promise.all([
+      const [students, activeStudents, attendance, payments, admissions, monthlyEnrollments, monthlyFees, settings, staff, pendingFees, recentTransactions, recentAdmissions, demographics, stateDemographics, cityDemographics, studentBirthdays, staffBirthdays, atRiskStudents, activeHomework, setupMetrics] = (await Promise.all([
         dashboardQuery('select count(*)::int as count from public.students'),
         dashboardQuery("select count(*)::int as count from public.students where lower(coalesce(status,'')) = 'active'"),
         dashboardQuery("select count(*)::int as total, count(*) filter (where lower(status) in ('p','present'))::int as present from public.attendance where attendance_date = current_date"),
-        dashboardQuery('select count(*)::int as count from public.attendance'),
         dashboardQuery("select coalesce(sum(amount),0)::numeric as total, count(*)::int as count from public.payments where paid_at >= date_trunc('month', current_date) and paid_at < date_trunc('month', current_date) + interval '1 month'"),
         dashboardQuery("select count(*)::int as total, count(*) filter (where lower(status) in ('pending','under review'))::int as pending from public.admissions"),
-        dashboardQuery('select count(*)::int as count from public.courses'),
-        dashboardQuery('select count(*)::int as count from public.batches'),
-        dashboardQuery('select count(*)::int as count from public.academic_years'),
-        dashboardQuery('select count(*)::int as count from public.assignments'),
         dashboardQuery("select to_char(months.month_start, 'Mon') as label, extract(year from months.month_start)::int as year, extract(quarter from months.month_start)::int as quarter, coalesce(count(students.id),0)::int as count from generate_series(date_trunc('month', current_date) - interval '11 months', date_trunc('month', current_date), interval '1 month') as months(month_start) left join public.students on coalesce(students.joined_at, case when students.record_json->>'admissionDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' then left(students.record_json->>'admissionDate',10)::date::timestamptz end) >= months.month_start and coalesce(students.joined_at, case when students.record_json->>'admissionDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' then left(students.record_json->>'admissionDate',10)::date::timestamptz end) < months.month_start + interval '1 month' group by months.month_start order by months.month_start"),
         dashboardQuery(`select to_char(months.month_start, 'Mon') as label, coalesce(sum(payments.amount),0)::numeric as amount from generate_series(date_trunc('month', current_date) - interval '5 months', date_trunc('month', current_date), interval '1 month') as months(month_start) left join public.payments on ${projectedPaymentDate('payments')} >= months.month_start and ${projectedPaymentDate('payments')} < months.month_start + interval '1 month' group by months.month_start order by months.month_start`),
         dashboardQuery('select config, institute_name from public.institute_settings where id=$1 limit 1', ['institute-settings']),
@@ -288,18 +282,29 @@ async function api(req, res, url) {
         dashboardQuery("select id, name, right(left(coalesce(record_json->>'dateOfBirth', record_json->>'date_of_birth', ''),10),5) as birthday from public.staff where right(left(coalesce(record_json->>'dateOfBirth', record_json->>'date_of_birth', ''),10),5)=to_char(current_date,'MM-DD') order by name limit 20"),
         dashboardQuery("select s.id, s.name, coalesce(s.batch_id,'') as batch, count(a.id)::int as marked, count(a.id) filter (where lower(a.status) in ('p','present'))::int as present from public.students s join public.attendance a on a.student_id in (s.id,s.student_id) and a.attendance_date >= current_date - interval '30 days' and a.attendance_date <= current_date group by s.id having count(a.id)>=4 and count(a.id) filter (where lower(a.status) in ('p','present')) * 100 < count(a.id) * 75 order by (count(a.id) filter (where lower(a.status) in ('p','present')))::numeric / nullif(count(a.id),0), s.name limit 5"),
         dashboardQuery("select id, title, batch_id as batch, due_date, status from public.assignments where lower(coalesce(status,'')) not in ('completed','archived','cancelled') order by due_date nulls last limit 5"),
-        dashboardQuery("select count(*)::int as total, count(*) filter (where lower(status) in ('p','present'))::int as present from public.attendance where attendance_date=current_date"),
-        dashboardQuery('select count(*)::int as count from public.subjects'),
-        dashboardQuery('select count(*)::int as count from public.topics'),
-        dashboardQuery('select count(*)::int as count from public.fees'),
-        dashboardQuery('select count(*)::int as count from public.class_messages'),
-        dashboardQuery('select count(*)::int as count from public.assignment_submissions'),
-        dashboardQuery('select count(*)::int as count from public.payroll'),
+        dashboardQuery("select (select count(*)::int from public.academic_years) as academic_years, (select count(*)::int from public.courses) as courses, (select count(*)::int from public.batches) as batches, (select count(*)::int from public.attendance) as attendance_records, (select count(*)::int from public.payments where paid_at is not null) as recorded_payments, (select count(*)::int from public.assignments) as assignments, (select count(*)::int from public.subjects) as subjects, (select count(*)::int from public.topics) as topics, (select count(*)::int from public.fees) as fees, (select count(*)::int from public.class_messages) as messages, (select count(*)::int from public.assignment_submissions) as submissions, (select count(*)::int from public.payroll) as payroll"),
       ])).map(normalizeDashboardResult);
       const count = result => Number(safeDashboardFirst(result).count || 0);
       const totalAttendance = Number(safeDashboardFirst(attendance).total || 0);
-      const recordedPayments = await dashboardQuery('select count(*)::int as count from public.payments where paid_at is not null');
-      const done = [count(academicYears) > 0, count(courses) > 0, count(batches) > 0, count(students) > 0, count(attendanceRecords) > 0, Number(safeDashboardFirst(recordedPayments).count || 0) > 0, count(assignments) > 0, count(staff) > 0, Number(safeDashboardFirst(admissions).total || 0) > 0, count(subjects) > 0, count(topics) > 0, count(feeRecords) > 0, count(sentMessages) > 0, count(submissions) > 0, count(payroll) > 0, Boolean(safeDashboardFirst(settings).institute_name)];
+      const sm = safeDashboardFirst(setupMetrics);
+      const done = [
+        Number(sm.academic_years || 0) > 0,
+        Number(sm.courses || 0) > 0,
+        Number(sm.batches || 0) > 0,
+        count(students) > 0,
+        Number(sm.attendance_records || 0) > 0,
+        Number(sm.recorded_payments || 0) > 0,
+        Number(sm.assignments || 0) > 0,
+        count(staff) > 0,
+        Number(safeDashboardFirst(admissions).total || 0) > 0,
+        Number(sm.subjects || 0) > 0,
+        Number(sm.topics || 0) > 0,
+        Number(sm.fees || 0) > 0,
+        Number(sm.messages || 0) > 0,
+        Number(sm.submissions || 0) > 0,
+        Number(sm.payroll || 0) > 0,
+        Boolean(safeDashboardFirst(settings).institute_name)
+      ];
       const setupSteps = [
         { label: 'Set up an academic year', description: 'Save an academic year in Academic Years.', complete: done[0] },
         { label: 'Add a course', description: 'Create at least one course.', complete: done[1] },
@@ -319,9 +324,7 @@ async function api(req, res, url) {
         { label: 'Set institute details', description: 'Save the institute profile in Settings.', complete: done[15] },
       ];
       const config = safeDashboardFirst(settings).config || {};
-      const plan = typeof config.planName === 'string' && config.planName.trim() ? config.planName.trim().slice(0, 60) : 'Plan not configured';
       return json(res, 200, {
-        plan,
         setup: { completed: done.filter(Boolean).length, total: done.length, steps: setupSteps },
         stats: {
           students: count(students), activeStudents: count(activeStudents),

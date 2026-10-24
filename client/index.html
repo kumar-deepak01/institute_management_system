@@ -3,31 +3,52 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#eef2f9" />
+    <meta name="theme-color" content="#f97316" />
     <meta name="description" content="My JEE Mentor institute workspace" />
     <script>
       (() => {
-        if (!/^\/teacher(?:\/|$)/.test(window.location.pathname)) return;
-        const root = document.documentElement;
-        root.dataset.teacherRoute = 'true';
-        let theme = 'light';
         try {
-          const saved = window.localStorage.getItem('teacher-theme');
-          if (saved === 'dark' || saved === 'light') theme = saved;
-          else theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          const root = document.documentElement;
+          const isTeacher = /^\/teacher(?:\/|$)/.test(window.location.pathname);
+          const isStudent = /^\/student(?:\/|$)/.test(window.location.pathname);
+          if (isTeacher) root.dataset.teacherRoute = 'true';
+          if (isStudent) root.dataset.studentRoute = 'true';
+
+          let theme = 'light';
+          const savedApp = window.localStorage.getItem('app-theme');
+          const savedRole = isTeacher
+            ? window.localStorage.getItem('teacher-theme')
+            : isStudent
+              ? window.localStorage.getItem('student-theme')
+              : window.localStorage.getItem('admin-theme');
+
+          const saved = savedApp || savedRole;
+          if (saved === 'dark' || saved === 'light') {
+            theme = saved;
+          } else {
+            theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+
+          if (theme === 'dark') {
+            root.classList.add('dark');
+          } else {
+            root.classList.remove('dark');
+          }
+          root.dataset.theme = theme;
+          if (isTeacher) root.dataset.teacherTheme = theme;
+          if (isStudent) root.dataset.studentTheme = theme;
         } catch {
-          try { theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch { /* Keep light mode when unavailable. */ }
+          /* Fallback to light mode if localStorage is unavailable */
         }
-        root.dataset.teacherTheme = theme;
       })();
     </script>
-    <link rel="icon" href="/src/assets/mainlogo.png" type="image/png" />
+    <link rel="icon" href="/src/assets/institute-logo.webp" type="image/webp" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <title>Log in | My JEE Mentor</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=Manrope:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <title>My JEE Mentor</title>
   </head>
-  <body>
+  <body class="bg-[#f8fafc] text-slate-800 antialiased dark:bg-[#0b0f19] dark:text-slate-100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

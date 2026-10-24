@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { HelmetProvider } from 'react-helmet-async';
 import PasswordChangeGate from './components/PasswordChangeGate';
 import PublicLayout from './components/PublicLayout';
 import LoginPage from './pages/LoginPage';
@@ -96,7 +97,7 @@ function Protected({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
-  return <>
+  return <HelmetProvider>
     <RouteEffects />
     <Routes>
       <Route element={<PublicLayout />}>
@@ -120,5 +121,5 @@ export default function App() {
       <Route path="/admissions" element={<Suspense fallback={<RouteLoading />}><AdmissionPage /></Suspense>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  </>;
+  </HelmetProvider>;
 }

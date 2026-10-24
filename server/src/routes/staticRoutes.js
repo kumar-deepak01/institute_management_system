@@ -20,7 +20,14 @@ async function handleStaticRoute(req, res, url) {
   try {
     const stat = await fs.stat(filePath);
     if (!stat.isFile()) throw new Error('Not a file');
-    res.writeHead(200, { 'Content-Type': contentTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin' });
+    const ext = path.extname(filePath).toLowerCase();
+    const headers = { 'Content-Type': contentTypes[ext] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin' };
+    if (pathname.includes('/assets/')) {
+      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    } else if (ext === '.html') {
+      headers['Cache-Control'] = 'public, max-age=0, must-revalidate';
+    }
+    res.writeHead(200, headers);
     if (req.method === 'HEAD') return res.end();
     const stream = fileStreams.createReadStream(filePath);
     stream.on('error', () => { if (!res.headersSent) { res.writeHead(404); res.end('Not found'); } else res.destroy(); });

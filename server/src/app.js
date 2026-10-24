@@ -1,5 +1,6 @@
 const http = require('node:http');
 const express = require('express');
+const compression = require('compression');
 const helmet = require('helmet');
 const { rateLimit } = require('express-rate-limit');
 const { requestedPort } = require('./config/env');
@@ -17,6 +18,7 @@ if (isProduction) {
 const apiRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 600, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests. Please try again later.' } });
 
 app.disable('x-powered-by');
+app.use(compression());
 app.use(helmet({
   hsts: isProduction ? undefined : false,
   contentSecurityPolicy: { directives: { upgradeInsecureRequests: isProduction ? [] : null } },
