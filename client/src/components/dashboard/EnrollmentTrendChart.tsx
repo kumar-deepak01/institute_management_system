@@ -208,3 +208,4 @@ function EnrollmentTrendChart({ data }: Props) {
 }
 
 export default memo(EnrollmentTrendChart);
+

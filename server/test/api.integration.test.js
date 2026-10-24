@@ -26,3 +26,4 @@ test('PostgreSQL projection maps account and admission fields to typed columns',
   assert.equal(admission.status, 'Pending');
   assert.equal(recordTable('Students', { _type: 'account' }), 'accounts');
 });
+

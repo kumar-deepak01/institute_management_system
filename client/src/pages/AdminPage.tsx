@@ -828,7 +828,7 @@ function DashboardView({
                   STUDENTS
                 </span>
               </div>
-              <span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-600 transition group-hover:scale-110 dark:bg-blue-950/50 dark:text-blue-400">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-50 text-orange-600 transition group-hover:scale-110 dark:bg-orange-950/50 dark:text-orange-400">
                 <AdminIcon name="student" className="h-5 w-5" />
               </span>
             </div>
@@ -837,7 +837,7 @@ function DashboardView({
                 {data.stats.students > 0 ? `+${number(data.stats.students)} this month` : `${number(data.stats.activeStudents)} active`}
               </span>
               <div className="w-24">
-                <StatSparkline color="blue" />
+                <StatSparkline color="orange" />
               </div>
             </div>
           </button>
@@ -968,7 +968,7 @@ function DashboardView({
                     onClick={() => setPeriod(item)}
                     className={`rounded-lg px-3 py-1 text-xs font-bold transition-all duration-150 ${
                       period === item
-                        ? 'bg-blue-600 text-white shadow-sm'
+                        ? 'bg-orange-500 text-white shadow-sm'
                         : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
                     }`}
                   >
@@ -1000,7 +1000,7 @@ function DashboardView({
                     onClick={() => setDemographic(item)}
                     className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all duration-150 ${
                       demographic === item
-                        ? 'bg-blue-600 text-white shadow-sm'
+                        ? 'bg-orange-500 text-white shadow-sm'
                         : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
                     }`}
                   >
@@ -1013,7 +1013,7 @@ function DashboardView({
           </div>,
           undefined,
           '',
-          'text-blue-500',
+          'text-orange-500',
         )}
       </section>
 
@@ -1223,7 +1223,7 @@ function DashboardView({
           </>,
           ['Timetable', '/admin/timetable'],
           '',
-          'text-blue-500',
+          'text-orange-500',
         )}
       </section>
 
@@ -1258,7 +1258,7 @@ function DashboardView({
             <div className="divide-y divide-slate-100 px-4 dark:divide-slate-800">
               {data.staffBirthdays.map(item => (
                 <p key={item.id} className="flex items-center gap-3 py-3">
-                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-blue-50 font-bold text-blue-600 dark:bg-blue-950/50 dark:text-blue-400">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-orange-50 font-bold text-orange-600 dark:bg-orange-950/50 dark:text-orange-400">
                     {item.name.slice(0, 1).toUpperCase()}
                   </span>
                   <b className="text-sm font-bold text-slate-800 dark:text-slate-100">{item.name}</b>
@@ -1270,7 +1270,7 @@ function DashboardView({
           ),
           undefined,
           '',
-          'text-blue-500',
+          'text-orange-500',
         )}
       </section>
 

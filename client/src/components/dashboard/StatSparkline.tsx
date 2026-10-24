@@ -60,3 +60,4 @@ function StatSparkline({ color, className = 'w-full h-8' }: StatSparklineProps) 
 }
 
 export default memo(StatSparkline);
+

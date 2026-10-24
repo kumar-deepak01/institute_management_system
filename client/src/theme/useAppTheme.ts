@@ -54,3 +54,4 @@ export function useAppTheme(role: 'admin' | 'teacher' | 'student' = 'admin') {
 
   return { theme, toggleTheme, setTheme, isDark: theme === 'dark' };
 }
+

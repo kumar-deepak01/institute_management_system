@@ -8,13 +8,13 @@ type Props = {
 };
 
 const sliceColors = [
-  '#2563eb', // royal blue (matching screenshot 1)
+  '#f97316', // brand orange
   '#10b981', // emerald
+  '#3b82f6', // blue
   '#f59e0b', // amber
-  '#f43f5e', // rose
   '#8b5cf6', // violet
   '#06b6d4', // cyan
-  '#ec4899', // pink
+  '#f43f5e', // rose
   '#64748b', // slate
 ];
 
@@ -174,3 +174,4 @@ function DemographicsDonutChart({ data, demographic }: Props) {
 }
 
 export default memo(DemographicsDonutChart);
+
