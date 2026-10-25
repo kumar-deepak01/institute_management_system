@@ -1,4 +1,4 @@
-﻿const crypto = require('node:crypto');
+const crypto = require('node:crypto');
 const ExcelJS = require('exceljs');
 const multer = require('multer');
 const { getPool } = require('../services/postgresStore');
@@ -60,7 +60,16 @@ function studentListQuery(url, all = false, paginate = true) {
       b.name as batch_name,coalesce(b.course_name,c.name,'') as course_name
     from public.students s left join public.batches b on b.id=s.batch_id left join public.courses c on c.id=b.course_id ${where}
   ), page as (select f.* from filtered f order by ${filteredOrder}${paging}),
-  attendance_totals as (select a.student_id,count(*) filter(where lower(coalesce(a.status,'')) in ('p','present'))::int present,count(*)::int total from public.attendance a where a.student_id=any(array(select id from page)) group by a.student_id),
+  attendance_totals as (
+    select a.student_id,
+      count(*) filter(where lower(coalesce(a.status,'')) in ('p','present'))::int present,
+      count(*)::int total 
+    from (
+      select student_id, status from public.attendance
+      union all
+      select student_key as student_id, status from public.live_class_joins
+    ) a where a.student_id=any(array(select id from page)) group by a.student_id
+  ),
   fee_totals as (select f.student_id,coalesce(sum(f.amount) filter(where lower(coalesce(f.status,'')) in ('pending','unpaid','overdue')),0)::numeric due,coalesce(sum(f.amount) filter(where lower(coalesce(f.status,'')) in ('paid','complete','completed')),0)::numeric paid,case when bool_or(lower(coalesce(f.status,''))='overdue') then 'OVERDUE' when bool_or(lower(coalesce(f.status,'')) in ('pending','unpaid')) then 'UPCOMING' when count(*)>0 then 'PAID' else '' end fee_status from public.fees f where f.student_id=any(array(select id from page)) group by f.student_id),
   payment_totals as (select p.student_id,coalesce(sum(p.amount),0)::numeric paid from public.payments p where p.student_id=any(array(select id from page)) group by p.student_id)
   select coalesce(jsonb_agg(to_jsonb(data)-'total'-'order_key' order by ${aggregateOrder}),'[]'::jsonb) records,
@@ -77,7 +86,15 @@ const studentDetailSql = `select s.id,s.student_id,s.name,s.email,s.roll,s.phone
   coalesce(a.present,0)::int as attendance_present,coalesce(a.total,0)::int as attendance_total,
   coalesce(f.due,0)::numeric as fees_due,coalesce(payments.paid,f.paid,0)::numeric as fees_paid,coalesce(f.fee_status,'') as fee_status
   from public.students s left join public.batches b on b.id=s.batch_id left join public.courses c on c.id=b.course_id
-  left join lateral (select count(*) filter(where lower(coalesce(status,'')) in ('p','present')) as present,count(*) as total from public.attendance where student_id=s.id) a on true
+  left join lateral (
+    select count(*) filter(where lower(coalesce(status,'')) in ('p','present')) as present,
+           count(*) as total
+    from (
+      select student_id, status from public.attendance where student_id=s.id
+      union all
+      select student_key as student_id, status from public.live_class_joins where student_key=s.id
+    ) att
+  ) a on true
   left join lateral (select coalesce(sum(case when lower(coalesce(status,'')) in ('pending','unpaid','overdue') then amount else 0 end),0) as due,coalesce(sum(case when lower(coalesce(status,'')) in ('paid','complete','completed') then amount else 0 end),0) as paid,
     case when bool_or(lower(coalesce(status,''))='overdue') then 'OVERDUE' when bool_or(lower(coalesce(status,'')) in ('pending','unpaid')) then 'UPCOMING' when count(*)>0 then 'PAID' else '' end as fee_status
     from public.fees where student_id=s.id) f on true

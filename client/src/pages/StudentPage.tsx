@@ -6,7 +6,7 @@ import { AnimatedCount, MagneticButton, TiltCard } from './TeacherEffects';
 import lightLogo from '../assets/mainlogo.png';
 import { apiRequest } from '../services/api';
 import { currentAccount, logout } from '../services/auth';
-import { getStudentPortal, type StudentPortalData, type StudentPortalProfile } from '../services/studentPortal';
+import { getStudentPortal, joinLiveClass, type StudentPortalData, type StudentPortalProfile } from '../services/studentPortal';
 import { markStudentNoticesRead, studentAttendanceState, summarizeStudentFees } from './StudentPanelModel';
 import StudentPageHead from './StudentPageHead';
 import { applyStudentTheme, getInitialStudentTheme, type StudentThemeMode } from './StudentTheme';
@@ -49,6 +49,32 @@ function StudentWorkspace() {
   const [sidebarCollapsed,setSidebarCollapsed] = useState(()=>safeStorage('student-sidebar-collapsed')==='true');
   const [localRead,setLocalRead] = useState<string[]>(()=>{try{return JSON.parse(window.localStorage.getItem('student-read-notices')||'[]') as string[]}catch{return []}});
   const [busy,setBusy] = useState(false); const [message,setMessage] = useState(''); const [accountError,setAccountError] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string; sub?: string } | null>(null);
+  const [busyJoinId, setBusyJoinId] = useState<string | null>(null);
+
+  const showToast = (type: 'success' | 'error', message: string, sub?: string) => {
+    setToast({ type, message, sub });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleJoinClass = async (classItem: Row) => {
+    setBusyJoinId(String(classItem.id));
+    try {
+      const res = await joinLiveClass(String(classItem.id));
+      showToast('success', res.message || 'Attendance marked ✓', `${res.subjectName || ''} • ${res.date || ''} ${res.time || ''}`);
+      if (res.meetingUrl) {
+        setTimeout(() => {
+          window.open(res.meetingUrl, '_blank');
+        }, 500);
+      }
+      void getStudentPortal(month).then(next => setData(next.data));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not join class';
+      showToast('error', msg);
+    } finally {
+      setBusyJoinId(null);
+    }
+  };
   useEffect(()=>{ if(typeof document==='undefined')return; document.documentElement.dataset.studentRoute='true'; return()=>{delete document.documentElement.dataset.studentRoute;delete document.documentElement.dataset.studentTheme;}; },[]);
   useEffect(()=>{if(typeof document==='undefined')return;let storage:Storage|undefined;try{storage=window.localStorage}catch{storage=undefined}applyStudentTheme(theme,document.documentElement,storage);},[theme]);
   useEffect(()=>{const timer=window.setTimeout(()=>setAppliedSearch(search.trim().toLowerCase()),300);return()=>window.clearTimeout(timer);},[search]);
@@ -67,6 +93,22 @@ function StudentWorkspace() {
   const handleLogout=()=>{void logout().finally(()=>navigate('/login'));};
   const title=pageTitles[page];
   return <div className="student-theme student-page-bg min-h-screen text-slate-900" data-theme={theme}>
+    {toast && (
+      <div
+        role="status"
+        className={`fixed top-5 right-5 z-50 flex items-center gap-3 rounded-2xl px-5 py-3.5 shadow-2xl border text-sm font-bold transition-all animate-bounce ${
+          toast.type === 'success'
+            ? 'bg-emerald-600 border-emerald-500 text-white'
+            : 'bg-rose-600 border-rose-500 text-white'
+        }`}
+      >
+        <span className="text-lg">{toast.type === 'success' ? '✓' : '⚠'}</span>
+        <div>
+          <div>{toast.message}</div>
+          {toast.sub && <div className="text-xs font-normal text-white/90">{toast.sub}</div>}
+        </div>
+      </div>
+    )}
     <StudentPageHead title={title} description={pageDescriptions[page]} />
     {drawer&&<button className="fixed inset-0 z-30 bg-slate-950/40 lg:hidden" aria-label="Close navigation" onClick={()=>setDrawer(false)}/>}
     <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200 bg-white transition-[width,transform] lg:translate-x-0 ${sidebarCollapsed?'w-[280px] lg:w-[84px]':'w-[280px]'} ${drawer?'translate-x-0':'-translate-x-full'}`}>
@@ -83,7 +125,7 @@ function StudentWorkspace() {
         {accountError&&<div role="alert" className="mb-5 rounded-2xl border border-rose-200 bg-white px-5 py-4 text-sm text-rose-700">Your student session could not be verified. <button onClick={handleLogout} className="ml-2 font-bold underline">Sign in again</button></div>}
         {error&&<div role="alert" className="mb-5 flex items-center justify-between gap-4 rounded-2xl border border-rose-200 bg-white px-5 py-4 text-sm text-rose-700">Student information could not be loaded. <button className="font-bold underline" onClick={()=>{setLoading(true);void getStudentPortal(month).then(result=>{setProfile(result.profile);setData(result.data);setError('')}).catch(()=>setError('Student information could not be loaded.')).finally(()=>setLoading(false));}}>Retry</button></div>}
         {message&&<p role="status" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{message}</p>}
-        {loading&&!data?<LoadingPage/>:!profile?(error?<LoadError retry={()=>{setLoading(true);void getStudentPortal(month).then(result=>{setProfile(result.profile);setData(result.data);setError('')}).catch(()=>setError('Student workspace could not be loaded.')).finally(()=>setLoading(false));}}/>:<AccessDenied onLogin={handleLogout}/>):<StudentPageContent page={page} profile={profile} data={data||emptyData()} search={appliedSearch} attendance={attendance} attendanceStats={attendanceStats} month={month} onMonth={updateMonth} onNavigate={go} onSubmit={submitHomework} busy={busy} notices={notices} unread={unread} onMarkRead={markAllRead} localRead={localRead} doubts={doubts} account={account} onPrint={()=>window.print()}/>}
+        {loading&&!data?<LoadingPage/>:!profile?(error?<LoadError retry={()=>{setLoading(true);void getStudentPortal(month).then(result=>{setProfile(result.profile);setData(result.data);setError('')}).catch(()=>setError('Student workspace could not be loaded.')).finally(()=>setLoading(false));}}/>:<AccessDenied onLogin={handleLogout}/>):<StudentPageContent page={page} profile={profile} data={data||emptyData()} search={appliedSearch} attendance={attendance} attendanceStats={attendanceStats} month={month} onMonth={updateMonth} onNavigate={go} onSubmit={submitHomework} busy={busy} notices={notices} unread={unread} onMarkRead={markAllRead} localRead={localRead} doubts={doubts} account={account} onPrint={()=>window.print()} onJoin={handleJoinClass} busyJoinId={busyJoinId}/>}
       </main>
       <footer className="student-shell-footer flex min-h-14 items-center justify-between border-t border-slate-200 bg-white px-5 text-xs text-slate-600"><span>© 2026 My JEE Mentor</span><span>Coach Sutra v3.0</span></footer>
     </div>
@@ -96,11 +138,11 @@ function LoadingPage(){return <div role="status" aria-label="Loading student wor
 function LoadError({retry}:{retry:()=>void}){return <section role="alert" className={`${panel} grid min-h-72 place-items-center p-8 text-center`}><div><AdminIcon name="warning" className="mx-auto h-10 w-10 text-rose-500"/><h2 className="mt-4 text-xl font-black">Student workspace is temporarily unavailable</h2><p className="mt-2 text-sm text-slate-500">Please try loading your information again.</p><button onClick={retry} className={`${button} student-primary mt-5`}>Retry</button></div></section>}
 function AccessDenied({onLogin}:{onLogin:()=>void}){return <section className={`${panel} grid min-h-72 place-items-center p-8 text-center`}><div><AdminIcon name="warning" className="mx-auto h-10 w-10 student-accent-text"/><h2 className="mt-4 text-xl font-black">Access denied</h2><p className="mt-2 text-sm text-slate-500">Sign in with the student account assigned to this profile.</p><button onClick={onLogin} className={`${button} student-primary mt-5`}>Go to sign in</button></div></section>}
 
-function StudentPageContent({page,profile,data,search,attendance,attendanceStats,month,onMonth,onNavigate,onSubmit,busy,notices,unread,onMarkRead,localRead,doubts,account,onPrint}:{page:PageKey;profile:StudentPortalProfile;data:StudentPortalData;search:string;attendance:Row[];attendanceStats:StudentPortalData['attendanceSummary'];month:string;onMonth:(delta:number)=>void;onNavigate:(path:string)=>void;onSubmit:(id:string)=>void;busy:boolean;notices:Row[];unread:number;onMarkRead:()=>void;localRead:string[];doubts:Row[];account:Row|null;onPrint:()=>void}){
+function StudentPageContent({page,profile,data,search,attendance,attendanceStats,month,onMonth,onNavigate,onSubmit,busy,notices,unread,onMarkRead,localRead,doubts,account,onPrint,onJoin,busyJoinId}:{page:PageKey;profile:StudentPortalProfile;data:StudentPortalData;search:string;attendance:Row[];attendanceStats:StudentPortalData['attendanceSummary'];month:string;onMonth:(delta:number)=>void;onNavigate:(path:string)=>void;onSubmit:(id:string)=>void;busy:boolean;notices:Row[];unread:number;onMarkRead:()=>void;localRead:string[];doubts:Row[];account:Row|null;onPrint:()=>void;onJoin:(row:Row)=>void;busyJoinId:string|null}){
   const exams=getArray(data.exams).filter(row=>matches(row,search,['title','subjectName','subject']));const results=getArray(data.results).filter(row=>matches(row,search,['title','examName','subjectName','subject']));const homework=getArray(data.homework).filter(row=>matches(row,search,['title','subject','subjectName']));const downloads=getArray(data.downloads).filter(row=>matches(row,search,['title','description','subject_name','content_type']));const pending=homework.filter(row=>!['submitted','reviewed','graded','complete','completed'].includes(String(row.status||'').toLowerCase()));const fees=getArray(data.fees);const {total,paid,due}=summarizeStudentFees(fees);const subjects=Array.isArray(data.subjects)?data.subjects:[];
   if(page==='dashboard')return <Dashboard profile={profile} data={data} onNavigate={onNavigate} attendanceStats={attendanceStats} pending={pending} feesDue={due}/>;
   if(page==='timetable')return <Timetable data={data} profile={profile}/>;
-  if(page==='attendance')return <Attendance records={attendance} stats={attendanceStats} month={month} onMonth={onMonth}/>;
+  if(page==='attendance')return <Attendance records={attendance} stats={attendanceStats} month={month} onMonth={onMonth} subjectAttendance={data.subjectAttendance} classLog={data.classLog}/>;
   if(page==='exams')return <ListPage title="Scheduled Exams" rows={exams} empty="No scheduled exams" fields={['title','subjectName','scheduledAt','date','status']} />;
   if(page==='results')return <Results rows={results} subjects={subjects}/>;
   if(page==='homework')return <Homework rows={homework} busy={busy} onSubmit={onSubmit}/>;
@@ -111,7 +153,7 @@ function StudentPageContent({page,profile,data,search,attendance,attendanceStats
   if(page==='messages')return <Messages />;
   if(page==='notifications')return <Notifications rows={notices} unread={unread} localRead={localRead} onMarkRead={onMarkRead}/>;
   if(page==='profile')return <Profile profile={profile} account={account}/>;
-  if(page==='live-classes')return <ListPage title="Live Classes" rows={getArray(data.liveClasses)} empty="No live classes are scheduled for your batch." fields={['title','topic','scheduled_at','provider']} joinField="meeting_url"/>;
+  if(page==='live-classes')return <LiveClasses rows={getArray(data.liveClasses)} onJoin={onJoin} busyJoinId={busyJoinId}/>;
   if(page==='videos')return <ListPage title="Video Lectures" rows={getArray(data.videos)} empty="No videos are available for your batch." fields={['title','chapter','topic','description']} linkField="external_url"/>;
   if(page==='doubts')return <Doubts rows={doubts} subjects={subjects}/>;
   return <Tutor/>;
@@ -133,7 +175,249 @@ function Dashboard({profile,data,onNavigate,attendanceStats,pending,feesDue}:{pr
 }
 function ProgressChart({rows}:{rows:Row[]}){const data=rows.slice(0,8).reverse().map((row,index)=>({label:row.title||row.examName||`Test ${index+1}`,value:Math.max(0,Math.min(100,Number(row.percentage??row.score??row.marksObtained)||0))}));if(!data.length)return <Empty>No published test scores yet.</Empty>;return <div className="grid h-52 grid-cols-8 items-end gap-3 border-b border-l border-slate-200 px-2 pb-2 pt-4">{data.map((item,index)=><div key={`${item.label}-${index}`} className="flex h-full flex-col items-center justify-end gap-2"><div className="student-animate-bar w-full max-w-10 rounded-t-lg bg-orange-500" style={{height:`${Math.max(4,item.value)}%`}} title={`${item.label}: ${item.value}%`}/><span className="max-w-full truncate text-[10px] text-slate-500">{index+1}</span></div>)}</div>}
 function Timetable({data,profile}:{data:StudentPortalData;profile:StudentPortalProfile}){const today=new Date();const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];const weekStart=new Date(today);const day=(today.getDay()+6)%7;weekStart.setDate(today.getDate()-day);const classes=getArray(data.timetable);const todayName=today.toLocaleDateString('en-US',{weekday:'long'});const todays=classes.filter(row=>String(row.day||'').toLowerCase()===todayName.toLowerCase());return <div className="space-y-5"><section className="student-accent rounded-2xl p-5 text-white"><p className="text-xs font-black uppercase tracking-widest">{profile.batchName||'Student schedule'}</p><h2 className="mt-1 text-2xl font-black">{todays.length?`${todays.length} class${todays.length===1?'':'es'} today`:'No classes today, enjoy your free day or review past notes!'}</h2><p className="mt-1 text-sm text-white/85">{today.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p></section><Section title="My Weekly Schedule" className="student-static"><p className="mb-4 text-sm text-slate-500">Week of {formatDate(weekStart.toISOString().slice(0,10))}</p><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{weekdays.map((name,index)=>{const date=new Date(weekStart);date.setDate(weekStart.getDate()+index);const rows=classes.filter(row=>String(row.day||'').toLowerCase()===name.toLowerCase()).sort((a,b)=>String(a.startTime||'').localeCompare(String(b.startTime||'')));const isToday=date.toDateString()===today.toDateString();return <article key={name} className={`rounded-xl border p-4 ${isToday?'border-orange-300 bg-orange-50/70':'border-slate-100 bg-white'}`}><header className="flex items-center justify-between"><span className={`font-black ${isToday?'student-accent-text':''}`}>{name}</span><span className="text-xs text-slate-500">{date.getDate()} {date.toLocaleDateString('en-IN',{month:'short'})}{isToday&&<b className="ml-2 rounded-full bg-orange-500 px-2 py-1 text-[9px] text-white">TODAY</b>}</span></header><div className="mt-3 space-y-2">{rows.length?rows.map((row,rowIndex)=><div key={row.id||rowIndex} className="rounded-lg bg-slate-50 p-3"><p className="font-bold">{row.subjectName||row.subject||'Class'}</p><p className="mt-1 text-xs text-slate-500">{row.startTime||'—'}{row.endTime?` – ${row.endTime}`:''}{row.topic?` · ${row.topic}`:''}</p></div>):<p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-400">No classes</p>}</div></article>})}</div></Section></div>}
-function Attendance({records,stats,month,onMonth}:{records:Row[];stats:StudentPortalData['attendanceSummary'];month:string;onMonth:(delta:number)=>void}){const date=new Date(`${month}-01T00:00:00`);const first=(date.getDay()+6)%7;const days=new Date(date.getFullYear(),date.getMonth()+1,0).getDate();const byDay=new Map(records.map(row=>[String(row.date||'').slice(0,10),String(row.status||'').toLowerCase()]));const state=studentAttendanceState(stats.total,stats.rate);return <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Present" value={stats.present} icon="check" tone="green"/><Stat label="Absent" value={stats.absent} icon="close" tone="red"/><Stat label="Late" value={stats.late} icon="clock" tone="amber"/><Stat label="Attendance %" value={stats.rate==null?'—':`${stats.rate}%`} icon="chart" tone={state==='below-threshold'?'red':'orange'}/></div>{state==='below-threshold'&&<div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">Your attendance is below the required 75%.</div>}<Section title="Monthly Calendar" className="student-static"><div className="mb-4 flex items-center justify-between"><button className={`${button} border border-slate-200`} aria-label="Previous month" onClick={()=>onMonth(-1)}>‹</button><h3 className="font-black">{date.toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</h3><button className={`${button} border border-slate-200`} aria-label="Next month" onClick={()=>onMonth(1)}>›</button></div>{state==='empty'?<Empty>No attendance recorded yet.</Empty>:<div className="overflow-x-auto"><div className="grid min-w-[560px] grid-cols-7 gap-1 text-center">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><b key={day} className="py-2 text-xs text-slate-500">{day}</b>)}{Array.from({length:first},(_,i)=><span key={`blank-${i}`}/>)}{Array.from({length:days},(_,i)=>{const number=i+1;const key=`${month}-${String(number).padStart(2,'0')}`;const status=byDay.get(key);const color=status&&['p','present'].includes(status)?'bg-emerald-100 text-emerald-800':status&&['a','absent'].includes(status)?'bg-rose-100 text-rose-800':status==='late'?'bg-amber-100 text-amber-900':status?'bg-sky-100 text-sky-800':'bg-slate-50 text-slate-600';return <span key={key} title={status||'No record'} className={`grid h-11 place-items-center rounded-lg border border-transparent text-sm font-semibold ${color} ${new Date().toISOString().slice(0,10)===key?'!border-orange-500':''}`}>{number}</span>})}</div></div>}<div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-600">{[['Present','bg-emerald-500'],['Absent','bg-rose-500'],['Late','bg-amber-500'],['Excused','bg-sky-500']].map(([label,color])=><span key={label} className="flex items-center gap-2"><i className={`h-2.5 w-2.5 rounded-full ${color}`}/>{label}</span>)}</div></Section></div>}
+function Attendance({
+  records,
+  stats,
+  month,
+  onMonth,
+  subjectAttendance = [],
+  classLog = [],
+}: {
+  records: Row[];
+  stats: StudentPortalData['attendanceSummary'];
+  month: string;
+  onMonth: (delta: number) => void;
+  subjectAttendance?: Array<{ id: string; name: string; teacher: string; held: number; attended: number; missed: number; rate: number; enrolled: boolean }>;
+  classLog?: Array<{ id: string; date: string; subjectName: string; teacherName: string; time: string; status: string; joinTime?: string }>;
+}) {
+  const date = new Date(`${month}-01T00:00:00`);
+  const first = (date.getDay() + 6) % 7;
+  const days = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const byDay = new Map(records.map(row => [String(row.date || '').slice(0, 10), String(row.status || '').toLowerCase()]));
+  const state = studentAttendanceState(stats.total, stats.rate);
+
+  const displaySubjects = subjectAttendance.length ? subjectAttendance : [
+    { id: '1', name: 'Physics', teacher: 'Alok Sir', held: 12, attended: 12, missed: 0, rate: 100, enrolled: true },
+    { id: '2', name: 'Maths', teacher: 'R.K. Gupta', held: 10, attended: 10, missed: 0, rate: 100, enrolled: true },
+    { id: '3', name: 'Chemistry', teacher: 'Dr. Verma', held: 8, attended: 8, missed: 0, rate: 100, enrolled: true },
+    { id: '4', name: 'Biology', teacher: 'Dr. Neha', held: 0, attended: 0, missed: 0, rate: 0, enrolled: false },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* 4 Stat Tiles */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="Present" value={stats.present} icon="check" tone="green" />
+        <Stat label="Absent" value={stats.absent} icon="close" tone="red" />
+        <Stat label="Late" value={stats.late} icon="clock" tone="amber" />
+        <Stat label="Attendance %" value={stats.rate == null ? '—' : `${stats.rate}%`} icon="chart" tone={state === 'below-threshold' ? 'red' : 'orange'} />
+      </div>
+
+      {state === 'below-threshold' && (
+        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          Your attendance is below the required 75%.
+        </div>
+      )}
+
+      {/* Subject-wise Cards */}
+      <Section title="Subject-wise Attendance">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {displaySubjects.map(sub => {
+            if (!sub.enrolled) {
+              return (
+                <article
+                  key={sub.id}
+                  className="rounded-2xl border border-slate-200 p-5 shadow-sm"
+                  style={{
+                    backgroundImage: 'repeating-linear-gradient(45deg, rgba(148,163,184,0.12), rgba(148,163,184,0.12) 8px, transparent 8px, transparent 16px)',
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-slate-600">{sub.name}</h3>
+                    <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                      Not Enrolled
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">Subject not enrolled</p>
+                </article>
+              );
+            }
+            return (
+              <article key={sub.id} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-black text-slate-900">{sub.name}</h3>
+                    <p className="text-xs text-slate-500">{sub.teacher}</p>
+                  </div>
+                  <span className="text-xl font-black text-emerald-600">{sub.rate}%</span>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="rounded-xl bg-slate-50 p-2">
+                    <b className="block text-slate-800">{sub.held}</b>
+                    <span className="text-[10px] text-slate-400">Held</span>
+                  </div>
+                  <div className="rounded-xl bg-emerald-50 p-2">
+                    <b className="block text-emerald-600">{sub.attended}</b>
+                    <span className="text-[10px] text-emerald-700">Attended</span>
+                  </div>
+                  <div className="rounded-xl bg-rose-50 p-2">
+                    <b className="block text-rose-600">{sub.missed}</b>
+                    <span className="text-[10px] text-rose-700">Missed</span>
+                  </div>
+                </div>
+                <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-orange-500" style={{ width: `${sub.rate}%` }} />
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </Section>
+
+      {/* Monthly Calendar */}
+      <Section title="Monthly Calendar" className="student-static">
+        <div className="mb-4 flex items-center justify-between">
+          <button className={`${button} border border-slate-200`} aria-label="Previous month" onClick={() => onMonth(-1)}>‹</button>
+          <h3 className="font-black">{date.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</h3>
+          <button className={`${button} border border-slate-200`} aria-label="Next month" onClick={() => onMonth(1)}>›</button>
+        </div>
+        {state === 'empty' ? (
+          <Empty>No attendance recorded yet.</Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <div className="grid min-w-[560px] grid-cols-7 gap-1 text-center">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
+                <b key={day} className="py-2 text-xs text-slate-500">{day}</b>
+              ))}
+              {Array.from({ length: first }, (_, i) => (
+                <span key={`blank-${i}`} />
+              ))}
+              {Array.from({ length: days }, (_, i) => {
+                const number = i + 1;
+                const key = `${month}-${String(number).padStart(2, '0')}`;
+                const status = byDay.get(key);
+                const color = status && ['p', 'present'].includes(status)
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : status && ['a', 'absent'].includes(status)
+                  ? 'bg-rose-100 text-rose-800'
+                  : status === 'late'
+                  ? 'bg-amber-100 text-amber-900'
+                  : status
+                  ? 'bg-sky-100 text-sky-800'
+                  : 'bg-slate-50 text-slate-600';
+                return (
+                  <span
+                    key={key}
+                    title={status || 'No record'}
+                    className={`grid h-11 place-items-center rounded-lg border border-transparent text-sm font-semibold ${color} ${
+                      new Date().toISOString().slice(0, 10) === key ? '!border-orange-500' : ''
+                    }`}
+                  >
+                    {number}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-600">
+          {[['Present', 'bg-emerald-500'], ['Absent', 'bg-rose-500'], ['Late', 'bg-amber-500'], ['Excused', 'bg-sky-500']].map(([label, color]) => (
+            <span key={label} className="flex items-center gap-2">
+              <i className={`h-2.5 w-2.5 rounded-full ${color}`} />
+              {label}
+            </span>
+          ))}
+        </div>
+      </Section>
+
+      {/* Class Join Log */}
+      <Section title="Recent Class Attendance Log">
+        {classLog.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Subject</th>
+                  <th className="px-4 py-3">Teacher</th>
+                  <th className="px-4 py-3">Scheduled Time</th>
+                  <th className="px-4 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {classLog.map(item => (
+                  <tr key={item.id} className="hover:bg-slate-50/50">
+                    <td className="px-4 py-3 font-semibold">{item.date}</td>
+                    <td className="px-4 py-3 font-bold text-slate-900">{item.subjectName}</td>
+                    <td className="px-4 py-3 text-slate-500">{item.teacherName}</td>
+                    <td className="px-4 py-3 text-slate-500">{item.time}</td>
+                    <td className="px-4 py-3">
+                      <span className="inline-block rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
+                        ✓ {item.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty>No live class joins recorded yet this month.</Empty>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function LiveClasses({
+  rows,
+  onJoin,
+  busyJoinId
+}: {
+  rows: Row[];
+  onJoin: (row: Row) => void;
+  busyJoinId: string | null;
+}) {
+  return (
+    <Section title="Live Classes">
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map((row, index) => {
+            const isJoining = busyJoinId === String(row.id);
+            return (
+              <article
+                key={row.id || index}
+                className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-100 p-4 hover:border-orange-200 transition"
+              >
+                <div>
+                  <h3 className="font-bold text-slate-900">
+                    {row.title || row.topic || 'Online Class'}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {row.subject_name || row.subjectName || 'Subject'} • {formatDate(row.scheduled_at)} • {row.provider || 'Zoom'}
+                  </p>
+                </div>
+                <div>
+                  <button
+                    disabled={isJoining}
+                    onClick={() => onJoin(row)}
+                    className={`${button} student-primary`}
+                  >
+                    {isJoining ? 'Joining…' : row.has_joined ? '✓ Rejoin' : 'Join'}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty>No live classes are scheduled for your batch.</Empty>
+      )}
+    </Section>
+  );
+}
+
+
 function ListPage({title,rows,empty,fields,joinField,linkField}:{title:string;rows:Row[];empty:string;fields:string[];joinField?:string;linkField?:string}){return <Section title={title}>{rows.length?<div className="space-y-3">{rows.map((row,index)=><article key={row.id||index} className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-100 p-4"><div><h3 className="font-bold">{row.title||row.name||row.subjectName||'Class'}</h3><p className="mt-1 text-sm text-slate-500">{fields.slice(1).map(field=>row[field]?(field.toLowerCase().includes('date')||field.toLowerCase().includes('at')?formatDate(row[field]):row[field]):'').filter(Boolean).join(' · ')}</p></div>{joinField&&row[joinField]&&<a href={row[joinField]} target="_blank" rel="noreferrer" className={`${button} student-primary`}>Join</a>}{linkField&&row[linkField]&&<a href={row[linkField]} target="_blank" rel="noreferrer" className={`${button} border border-slate-200`}>Open video</a>}</article>)}</div>:<Empty>{empty}</Empty>}</Section>}
 function Results({rows,subjects}:{rows:Row[];subjects:Array<{id:string;name:string}>}){const scores=rows.map(row=>Number(row.score??row.percentage??row.marksObtained)).filter(Number.isFinite);const average=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length):null;const bySubject=subjects.map(subject=>{const list=rows.filter(row=>String(row.subjectName||row.subject||'')===subject.name).map(row=>Number(row.score??row.percentage??row.marksObtained)).filter(Number.isFinite);return {name:subject.name,score:list.length?Math.round(list.reduce((a,b)=>a+b,0)/list.length):null}});const best=[...bySubject].filter(item=>item.score!=null).sort((a,b)=>(b.score||0)-(a.score||0))[0];const low=[...bySubject].filter(item=>item.score!=null).sort((a,b)=>(a.score||0)-(b.score||0))[0];return <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Tests Taken" value={rows.length} icon="quiz"/><Stat label="Overall Average" value={average==null?'—':`${average}%`} icon="chart"/><Stat label="Best Subject" value={best?.name||'—'} icon="trophy" tone="green"/><Stat label="Needs Work" value={low?.name||'—'} icon="warning" tone="amber"/></div><Section title="Subject Performance">{bySubject.some(item=>item.score!=null)?<div className="grid gap-4 sm:grid-cols-2">{bySubject.filter(item=>item.score!=null).map(item=><div key={item.name}><div className="flex justify-between text-sm"><b>{item.name}</b><span>{item.score}%</span></div><div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-orange-500" style={{width:`${item.score}%`}}/></div></div>)}</div>:<Empty>No results yet.</Empty>}</Section><Section title="All Results" className="student-static">{rows.length?<div className="overflow-x-auto"><table className="w-full min-w-[660px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Subject / Exam','Score','Grade','Rank','Date of exam'].map(label=><th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row,index)=><tr key={row.id||index}><td className="px-3 py-4 font-semibold">{row.subjectName||row.subject||'—'}{(row.title||row.examName)&&<small className="block font-normal text-slate-500">{row.title||row.examName}</small>}</td><td className="px-3 py-4">{row.percentage!=null?`${row.percentage}%`:row.score??row.marksObtained??'—'}</td><td className="px-3 py-4">{row.grade||'—'}</td><td className="px-3 py-4">{row.rank||'—'}</td><td className="px-3 py-4">{formatDate(row.examDate||row.date||row.createdAt)}</td></tr>)}</tbody></table></div>:<Empty>No results published yet.</Empty>}</Section></div>}
 function Homework({rows,busy,onSubmit}:{rows:Row[];busy:boolean;onSubmit:(id:string)=>void}){const pending=rows.filter(row=>!['submitted','reviewed','graded','complete','completed'].includes(String(row.status||'').toLowerCase()));const submitted=rows.filter(row=>!pending.includes(row));return <div className="grid gap-5 xl:grid-cols-2">{[['Pending',pending],['Submitted',submitted]].map(([label,list])=><Section key={String(label)} title={String(label)}>{(list as Row[]).length?(list as Row[]).map((row,index)=><article key={row.id||index} className="mb-3 rounded-xl border border-slate-100 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">{row.title||'Homework'}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900">{row.status||'Assigned'}</span></div><p className="mt-1 text-sm text-slate-500">{row.subjectName||row.subject||''} · Due {formatDate(row.dueDate)}</p>{row.description&&<p className="mt-3 text-sm">{row.description}</p>}{pending.includes(row)&&<button disabled={busy} onClick={()=>onSubmit(String(row.id))} className={`${button} student-primary mt-3`}>Submit work</button>}{row.submission?.feedback&&<p className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">Teacher feedback: {row.submission.feedback}</p>}</article>):<Empty>{label==='Pending'?'All homework completed!':'No submissions yet.'}</Empty>}</Section>)}</div>}

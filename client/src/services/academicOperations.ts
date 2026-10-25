@@ -8,6 +8,7 @@ export type AttendanceResponse = { students: AttendanceStudent[]; date: string; 
 export type RecordItem = Record<string, any> & { id: string; status?: string; createdAt?: string };
 async function csrf() { const result = await apiRequest<{ csrfToken: string }>('/api/auth/csrf'); return { 'X-CSRF-Token': result.csrfToken }; }
 export const getAttendanceLookups = () => apiRequest<AcademicLookups>('/api/admin/academics/attendance/lookups');
+export const getLiveAttendanceSummary = (batchId = '', date = '') => apiRequest<any>(`/api/admin/academics/attendance/live-summary?${new URLSearchParams({ batchId, date })}`);
 export const getAttendance = (batchId: string, date: string) => apiRequest<AttendanceResponse>(`/api/admin/academics/attendance?${new URLSearchParams({ batchId, date })}`);
 export const saveAttendance = async (batchId: string, date: string, records: Array<{ studentKey: string; status: string }>) => apiRequest<{ saved: number }>('/api/admin/academics/attendance', { method: 'POST', headers: await csrf(), body: { batchId, date, records } });
 export const bulkAttendance = async (input: { batchId: string; fromDate: string; toDate: string; status: string; studentKeys: string[] }) => apiRequest<{ saved: number }>('/api/admin/academics/attendance/bulk', { method: 'POST', headers: await csrf(), body: input });

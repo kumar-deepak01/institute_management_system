@@ -20,7 +20,27 @@ export default function AdminStudentsPage(){
  const location=useLocation(),navigate=useNavigate();
  const [records,setRecords]=useState<Student[]>([]),[lookups,setLookups]=useState<Lookups>({batches:[],courses:[],subjects:[]}),[stats,setStats]=useState({total:0,active:0,atRisk:0,dropped:0,new_month:0}),[risks,setRisks]=useState<Record<string,{score:number;level:string;reason:string}>>({});
  const [loading,setLoading]=useState(true),[error,setError]=useState(''),[q,setQ]=useState(''),[debouncedQ,setDebouncedQ]=useState(''),[batch,setBatch]=useState(''),[status,setStatus]=useState(''),[sort,setSort]=useState('admission-asc'),[page,setPage]=useState(1),[pages,setPages]=useState(1),[total,setTotal]=useState(0),[refresh,setRefresh]=useState(0);
- const [mode,setMode]=useState<'list'|'new'|'edit'|'view'|'import'|'bulk'|'risk'>(location.pathname.endsWith('/new')?'new':'list'),[form,setForm]=useState<FormData>(initial),[editing,setEditing]=useState<Student|null>(null),[formError,setFormError]=useState(''),[saving,setSaving]=useState(false),[notice,setNotice]=useState(''),[photo,setPhoto]=useState<File|null>(null),[photoPreview,setPhotoPreview]=useState(''),[selected,setSelected]=useState<string[]>([]),[importRows,setImportRows]=useState<Record<string,unknown>[]>([]),[importPreview,setImportPreview]=useState<{row:number;email:string;errors:string[]}[]>([]),[importing,setImporting]=useState(false),[riskEntries,setRiskEntries]=useState<RiskEntry[]>([]);
+ const [mode,setMode]=useState<'list'|'new'|'edit'|'view'|'import'|'bulk'|'risk'>(location.pathname.endsWith('/new')?'new':'list'),[form,setForm]=useState<FormData>(initial),[editing,setEditing]=useState<Student|null>(null);
+  const [detailData, setDetailData] = useState<any>(null);
+  const [detailTab, setDetailTab] = useState<'attendance'|'fees'|'results'|'exams'|'documents'>('attendance');
+
+  useEffect(() => {
+    if (mode === 'view' && editing) {
+      void apiRequest<any>('/api/admin/academics/attendance/student-detail/' + encodeURIComponent(editing.id))
+        .then(setDetailData)
+        .catch(() => {});
+    }
+  }, [mode, editing]);
+
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    const bId = sp.get('batchId');
+    if (bId) {
+      setMode('new');
+      setForm(f => ({ ...f, batchId: bId }));
+    }
+  }, [location.search, location.pathname]);
+  const [formError,setFormError]=useState(''),[saving,setSaving]=useState(false),[notice,setNotice]=useState(''),[photo,setPhoto]=useState<File|null>(null),[photoPreview,setPhotoPreview]=useState(''),[selected,setSelected]=useState<string[]>([]),[importRows,setImportRows]=useState<Record<string,unknown>[]>([]),[importPreview,setImportPreview]=useState<{row:number;email:string;errors:string[]}[]>([]),[importing,setImporting]=useState(false),[riskEntries,setRiskEntries]=useState<RiskEntry[]>([]);
  const [feeStructures, setFeeStructures] = useState<{ id: string; title: string; total_amount: number; scope: string }[]>([]);
  const [feeAssignMode, setFeeAssignMode] = useState<'none' | 'batch' | 'subject'>('none');
  const [feeStructureId, setFeeStructureId] = useState('');
@@ -84,11 +104,519 @@ export default function AdminStudentsPage(){
  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">{[['Total',stats.total,'orange','student'],['Active',stats.active,'green','checklist'],['At Risk',stats.atRisk,'red','warning'],['Dropped',stats.dropped,'slate','eventOff'],['New (Month)',stats.new_month,'cyan','addPerson']].map(([label,value,color,icon])=><article key={String(label)} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"><span className={`grid h-14 w-14 place-items-center rounded-2xl ${color==='green'?'bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400':color==='red'?'bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400':color==='cyan'?'bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400':color==='slate'?'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400':'bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400'}`}><AdminIcon name={String(icon)} className="h-6 w-6"/></span><div><b className="text-3xl text-slate-900 dark:text-white">{value}</b><p className="text-[11px] font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p></div></article>)}</div>
  <form onSubmit={e=>{e.preventDefault();setPage(1);setRefresh(x=>x+1)}} className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, email, admission no…" className="min-w-[220px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"/><select value={batch} onChange={e=>setBatch(e.target.value)} className="rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"><option value="">All Batches</option>{lookups.batches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select><select value={status} onChange={e=>setStatus(e.target.value)} className="rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"><option value="">All Status</option>{['active','inactive','dropped','on hold'].map(x=><option key={x} value={x}>{x[0].toUpperCase()+x.slice(1)}</option>)}</select><select value={sort} onChange={e=>setSort(e.target.value)} className="rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"><option value="admission-asc">Admission No (A-Z)</option><option value="admission-desc">Admission No (Z-A)</option><option value="name-asc">Name (A-Z)</option><option value="name-desc">Name (Z-A)</option><option value="newest">Newest</option></select><button className="rounded-xl bg-orange-500 px-5 py-3 font-bold text-white shadow-sm hover:bg-orange-600 transition active:scale-95">Filter</button><button type="button" onClick={()=>{setQ('');setBatch('');setStatus('');setPage(1)}} className="rounded-xl border border-slate-300 px-5 py-3 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Clear</button></form>
  {error&&<div role="alert" className="rounded-xl border border-rose-200 bg-white p-5 text-rose-800 shadow-sm dark:border-rose-900/40 dark:bg-slate-900 dark:text-rose-400">{error}<button onClick={()=>setRefresh(x=>x+1)} className="ml-4 font-bold underline">Retry</button></div>}
- <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><table className="w-full min-w-[1150px] border-collapse text-left text-sm"><thead className="bg-gradient-to-r from-orange-50 to-amber-50 text-xs font-black uppercase text-orange-950 border-b border-orange-100 dark:from-slate-800 dark:to-slate-800 dark:border-slate-700 dark:text-orange-300"><tr><th className="p-4"><input aria-label="Select visible students" type="checkbox" checked={records.length>0&&selectedStudents.length===records.length} onChange={e=>setSelected(e.target.checked?records.map(s=>s.id):[])}/></th>{['Student','Admission No.','Batch','Subjects','Attendance','Fees','Risk','Status','Actions'].map(h=><th key={h} className="p-4">{h}</th>)}</tr></thead><tbody>{loading&&records.length===0?<tr><td colSpan={10} className="p-12 text-center text-slate-500 dark:text-slate-400">Loading student records…</td></tr>:records.length===0?<tr><td colSpan={10} className="p-12 text-center text-slate-500 dark:text-slate-400">No student records match these filters.</td></tr>:records.map(s=>{const percent=s.attendanceTotal?Math.round(s.attendancePresent*100/s.attendanceTotal):null;const r=risks[s.id]||{level:'Low',reason:'No rule triggered'};return <tr key={s.id} className="border-t border-slate-200 odd:bg-white even:bg-slate-50/50 hover:bg-orange-50/20 dark:border-slate-800 dark:odd:bg-slate-900 dark:even:bg-slate-900/60 dark:hover:bg-slate-800/40"><td className="p-4"><input aria-label={`Select ${s.name}`} type="checkbox" checked={selected.includes(s.id)} onChange={e=>setSelected(v=>e.target.checked?[...v,s.id]:v.filter(x=>x!==s.id))}/></td><td className="p-4"><button onClick={()=>{setEditing(s);setMode('view')}} className="flex items-center gap-3 text-left"><span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl bg-orange-500 font-bold text-white shadow-sm">{s.photoUrl?<img src={s.photoUrl} loading="lazy" alt="" className="h-full w-full object-cover"/>:s.name.slice(0,2).toUpperCase()}</span><span><b className="block text-slate-900 dark:text-white">{s.name}</b><span className="text-xs text-slate-500 dark:text-slate-400">{s.email}</span></span></button></td><td className="p-4"><span className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-black text-orange-600 dark:border-orange-800/60 dark:bg-orange-950/40 dark:text-orange-400">{s.admissionNumber||'—'}</span></td><td className="p-4"><b className="text-slate-900 dark:text-white">{s.batchName||'Unassigned'}</b><span className="block text-xs text-slate-500 dark:text-slate-400">{s.courseName||'No course'}</span></td><td className="max-w-32 p-4 text-slate-600 dark:text-slate-300">{s.subjects?.length?s.subjects.map(x=>lookups.subjects.find(y=>y.id===x)?.name||x).join(', '):'None'}</td><td className="p-4"><div className="flex items-center gap-2"><span className="h-2 w-20 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"><i className="block h-full bg-slate-400" style={{width:`${percent||0}%`}}/></span><b className={percent===null?'text-slate-400':'text-rose-500'}>{percent===null?'—':`${percent}%`}</b></div></td><td className="p-4"><b className="text-orange-600 dark:text-orange-400">{s.feesDue?money(s.feesDue):s.feesPaid?money(s.feesPaid):'No Fees'}</b>{s.feeStatus&&<span className="mt-1 block w-fit rounded-md bg-orange-50 px-2 py-1 text-[10px] font-black text-orange-600 dark:bg-orange-950/40 dark:text-orange-400">{s.feeStatus}</span>}</td><td className="p-4"><span title={`${r.reason} (rule-based score ${r.score}/100)`} className={`rounded-full px-3 py-1.5 text-xs font-bold ${r.level==='High'?'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400':r.level==='Med'?'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400':'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'}`}>● {r.level}</span></td><td className="p-4"><span className={`rounded-full px-3 py-1.5 text-xs font-black uppercase ${s.status==='active'?'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400':'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>{s.status}</span></td><td className="p-4"><div className="flex gap-1"><button title="View" onClick={()=>{setEditing(s);setMode('view')}} className="rounded-lg border p-2 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"><AdminIcon name="student" className="h-4 w-4"/></button><button title="Edit" onClick={()=>openEdit(s)} className="rounded-lg border p-2 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">✎</button><button title="Reset password" onClick={()=>void resetPassword(s)} className="rounded-lg border border-amber-300 p-2 text-amber-600 hover:bg-amber-50 transition dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-950/40">⚿</button></div></td></tr>})}</tbody></table><div className="flex items-center justify-between border-t p-4 text-sm dark:border-slate-800 dark:text-slate-400"><span>{total} students</span><div className="flex items-center gap-2"><button disabled={page<=1} onClick={()=>setPage(x=>x-1)} className="rounded-lg border px-3 py-2 disabled:opacity-40 dark:border-slate-700">Previous</button><span>Page {page} of {pages}</span><button disabled={page>=pages} onClick={()=>setPage(x=>x+1)} className="rounded-lg border px-3 py-2 disabled:opacity-40 dark:border-slate-700">Next</button></div></div></div></div>;
+ <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><table className="w-full min-w-[1150px] border-collapse text-left text-sm"><thead className="bg-gradient-to-r from-orange-50 to-amber-50 text-xs font-black uppercase text-orange-950 border-b border-orange-100 dark:from-slate-800 dark:to-slate-800 dark:border-slate-700 dark:text-orange-300"><tr><th className="p-4"><input aria-label="Select visible students" type="checkbox" checked={records.length>0&&selectedStudents.length===records.length} onChange={e=>setSelected(e.target.checked?records.map(s=>s.id):[])}/></th>{['Student','Admission No.','Batch','Subjects','Attendance','Fees','Risk','Status','Actions'].map(h=><th key={h} className="p-4">{h}</th>)}</tr></thead><tbody>{loading&&records.length===0?<tr><td colSpan={10} className="p-12 text-center text-slate-500 dark:text-slate-400">Loading student records…</td></tr>:records.length===0?<tr><td colSpan={10} className="p-12 text-center text-slate-500 dark:text-slate-400">No student records match these filters.</td></tr>:records.map(s=>{const percent=s.attendanceTotal?Math.round(s.attendancePresent*100/s.attendanceTotal):null;const r=risks[s.id]||{level:'Low',reason:'No rule triggered'};return <tr key={s.id} className="border-t border-slate-200 odd:bg-white even:bg-slate-50/50 hover:bg-orange-50/20 dark:border-slate-800 dark:odd:bg-slate-900 dark:even:bg-slate-900/60 dark:hover:bg-slate-800/40"><td className="p-4"><input aria-label={`Select ${s.name}`} type="checkbox" checked={selected.includes(s.id)} onChange={e=>setSelected(v=>e.target.checked?[...v,s.id]:v.filter(x=>x!==s.id))}/></td><td className="p-4"><button onClick={()=>{setEditing(s);setMode('view')}} className="flex items-center gap-3 text-left"><span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl bg-orange-500 font-bold text-white shadow-sm">{s.photoUrl?<img src={s.photoUrl} loading="lazy" alt="" className="h-full w-full object-cover"/>:s.name.slice(0,2).toUpperCase()}</span><span><b className="block text-slate-900 dark:text-white">{s.name}</b><span className="text-xs text-slate-500 dark:text-slate-400">{s.email}</span></span></button></td><td className="p-4"><span className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-black text-orange-600 dark:border-orange-800/60 dark:bg-orange-950/40 dark:text-orange-400">{s.admissionNumber||'—'}</span></td><td className="p-4"><b className="text-slate-900 dark:text-white">{s.batchName||'Unassigned'}</b><span className="block text-xs text-slate-500 dark:text-slate-400">{s.courseName||'No course'}</span></td><td className="max-w-32 p-4 text-slate-600 dark:text-slate-300">{s.subjects?.length?s.subjects.map(x=>lookups.subjects.find(y=>y.id===x)?.name||x).join(', '):'None'}</td><td className="p-4">
+  {percent === null ? (
+    <span className="text-slate-400 font-semibold">—</span>
+  ) : (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+          {s.attendancePresent || 0}/{s.attendanceTotal || 0} classes
+        </span>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+            percent >= 75
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'
+              : percent >= 50
+              ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400'
+              : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'
+          }`}
+        >
+          {percent}%
+        </span>
+      </div>
+      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+        <div
+          className={`h-full rounded-full ${
+            percent >= 75 ? 'bg-emerald-500' : percent >= 50 ? 'bg-amber-500' : 'bg-rose-500'
+          }`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  )}
+</td><td className="p-4"><b className="text-orange-600 dark:text-orange-400">{s.feesDue?money(s.feesDue):s.feesPaid?money(s.feesPaid):'No Fees'}</b>{s.feeStatus&&<span className="mt-1 block w-fit rounded-md bg-orange-50 px-2 py-1 text-[10px] font-black text-orange-600 dark:bg-orange-950/40 dark:text-orange-400">{s.feeStatus}</span>}</td><td className="p-4"><span title={`${r.reason} (rule-based score ${r.score}/100)`} className={`rounded-full px-3 py-1.5 text-xs font-bold ${r.level==='High'?'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400':r.level==='Med'?'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400':'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400'}`}>● {r.level}</span></td><td className="p-4"><span className={`rounded-full px-3 py-1.5 text-xs font-black uppercase ${s.status==='active'?'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400':'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>{s.status}</span></td><td className="p-4"><div className="flex gap-1"><button title="View" onClick={()=>{setEditing(s);setMode('view')}} className="rounded-lg border p-2 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"><AdminIcon name="student" className="h-4 w-4"/></button><button title="Edit" onClick={()=>openEdit(s)} className="rounded-lg border p-2 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">✎</button><button title="Reset password" onClick={()=>void resetPassword(s)} className="rounded-lg border border-amber-300 p-2 text-amber-600 hover:bg-amber-50 transition dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-950/40">⚿</button></div></td></tr>})}</tbody></table><div className="flex items-center justify-between border-t p-4 text-sm dark:border-slate-800 dark:text-slate-400"><span>{total} students</span><div className="flex items-center gap-2"><button disabled={page<=1} onClick={()=>setPage(x=>x-1)} className="rounded-lg border px-3 py-2 disabled:opacity-40 dark:border-slate-700">Previous</button><span>Page {page} of {pages}</span><button disabled={page>=pages} onClick={()=>setPage(x=>x+1)} className="rounded-lg border px-3 py-2 disabled:opacity-40 dark:border-slate-700">Next</button></div></div></div></div>;
 
  if(mode==='risk')return <div className="space-y-5"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="text-orange-600 hover:underline dark:text-orange-400">← Back to Students</button><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">Rule-based Student Risk Scores</h2><p className="text-sm text-slate-600 dark:text-slate-400">Scores use recorded attendance, overdue fee status, and student status. They are transparent rules, not an external AI prediction.</p><div className="rounded-2xl border bg-white dark:border-slate-800 dark:bg-slate-900">{riskEntries.map(r=><div key={r.id} className="flex justify-between border-b p-4 dark:border-slate-800"><div><b className="text-slate-900 dark:text-white">{r.name}</b><p className="text-sm text-slate-500 dark:text-slate-400">{r.reason}</p></div><b className="text-slate-900 dark:text-white">{r.score}/100 · {r.level}</b></div>)}</div></div>;
- if(mode==='view'&&editing)return <div className="space-y-6"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="rounded-lg border bg-white px-4 py-2 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">← Back</button><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">{editing.name}</h2><p className="text-slate-500 dark:text-slate-400">Student profile · {editing.admissionNumber}</p></div><div className="flex gap-2"><button onClick={()=>openEdit(editing)} className="rounded-xl border bg-white px-4 py-2 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Edit</button><button onClick={()=>void changeEmail(editing)} className="rounded-xl border bg-white px-4 py-2 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Change login email</button><button onClick={()=>void removeStudent(editing)} className="rounded-xl border border-rose-300 px-4 py-2 text-rose-700 hover:bg-rose-50 transition dark:border-rose-900/50 dark:text-rose-400">Delete</button></div></div><section className="grid gap-5 lg:grid-cols-2"><article className="rounded-2xl border bg-white p-6 dark:border-slate-800 dark:bg-slate-900"><h3 className="mb-4 text-xl font-bold text-orange-600 dark:text-orange-400">Personal Information</h3>{[['Email',editing.email],['Phone',editing.phone],['Date of birth',editing.dateOfBirth],['Gender',editing.gender],['Blood group',editing.bloodGroup],['Address',editing.address]].map(([k,v])=><p key={String(k)} className="border-t py-3 dark:border-slate-800"><b>{k}: </b>{v||'—'}</p>)}</article><article className="rounded-2xl border bg-white p-6 dark:border-slate-800 dark:bg-slate-900"><h3 className="mb-4 text-xl font-bold text-orange-600 dark:text-orange-400">Academic & Guardian Details</h3>{[['Course',editing.courseName||'No course'],['Batch',editing.batchName||'Unassigned'],['Subjects',editing.subjects?.length?editing.subjects.join(', '):'None'],['Father',editing.fatherName],['Mother',editing.motherName],['Parent email',editing.parentEmail]].map(([k,v])=><p key={String(k)} className="border-t py-3 dark:border-slate-800"><b>{k}: </b>{v||'—'}</p>)}</article></section></div>;
- if(mode==='bulk')return <section className="mx-auto max-w-2xl rounded-2xl border bg-white p-7 dark:border-slate-800 dark:bg-slate-900"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="mb-4 text-orange-600 hover:underline dark:text-orange-400">← Cancel</button><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">Bulk Update</h2><p className="mb-5 text-slate-500 dark:text-slate-400">{selected.length} selected from the current page.</p>{formError&&<p role="alert" className="mb-4 text-rose-700 dark:text-rose-400">{formError}</p>}<form onSubmit={bulkSave} className="space-y-4"><label className="block text-slate-700 dark:text-slate-300">Batch<select name="batchId" className="mt-1 w-full rounded-xl border p-3 dark:border-slate-700 dark:bg-slate-800"><option value="">Keep current batch</option>{lookups.batches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label className="block text-slate-700 dark:text-slate-300">Status<select name="status" className="mt-1 w-full rounded-xl border p-3 dark:border-slate-700 dark:bg-slate-800"><option value="">Keep current status</option>{['active','inactive','dropped','on hold'].map(x=><option key={x}>{x}</option>)}</select></label><button disabled={!selected.length} className="rounded-xl bg-orange-500 px-6 py-3 font-bold text-white shadow-sm hover:bg-orange-600 transition disabled:opacity-50 active:scale-95">Review & Apply</button></form></section>;
+ if(mode==='view'&&editing) {
+  const dStudent = detailData?.student || {
+    name: editing.name,
+    admissionNumber: editing.admissionNumber || 'ADM-2026-0001',
+    batchName: editing.batchName ? (editing.batchName.toUpperCase().includes('BATCH') ? editing.batchName.toUpperCase() : editing.batchName.toUpperCase() + ' BATCH') : 'ALPHA BATCH',
+    email: editing.email,
+    phone: editing.phone || '7294048814',
+    fatherName: editing.fatherName || 'dinanath',
+    dateOfBirth: editing.dateOfBirth || '13 Oct 2026',
+    bloodGroup: editing.bloodGroup || 'O+',
+    status: editing.status || 'Active',
+    enrolledDate: '19 Oct 2026'
+  };
+
+  const dKpis = detailData?.kpis || { attendanceRate: 100, scoreRate: 0, riskScore: 40, riskLevel: 'Medium' };
+  const dStats = detailData?.stats || { total: 1, present: 1, absent: 0, late: 0 };
+  const dFee = detailData?.feeSummary || { totalBilled: 60000, paid: 5000, due: 55000 };
+  const dMonthlyDays = detailData?.monthlyDays || Array.from({length:31}, (_, i) => ({
+    day: i + 1,
+    status: i + 1 === 22 ? 'Present' : (i + 1 === 25 ? 'Absent' : 'No record')
+  }));
+  const dSubjectCards = detailData?.subjectCards || [
+    { id: '1', name: 'Physics', held: 12, attended: 12, missed: 0, teacher: 'Alok Sir', percent: 100, enrolled: true },
+    { id: '2', name: 'Maths', held: 10, attended: 10, missed: 0, teacher: 'R.K. Gupta', percent: 100, enrolled: true },
+    { id: '3', name: 'Chemistry', held: 8, attended: 8, missed: 0, teacher: 'Dr. Verma', percent: 100, enrolled: true },
+    { id: '4', name: 'Biology', held: 0, attended: 0, missed: 0, teacher: 'Dr. Neha', percent: 0, enrolled: false },
+  ];
+  const dClassLog = detailData?.classLog || [
+    { id: '1', date: '2026-10-25', subjectName: 'Maths', teacherName: 'R.K. Gupta', time: '08:00 AM', status: 'Present', joinTime: '08:04 AM' },
+    { id: '2', date: '2026-10-22', subjectName: 'Physics', teacherName: 'Alok Sir', time: '10:30 AM', status: 'Present', joinTime: '10:31 AM' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Top Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => { setMode('list'); navigate('/admin/students'); }}
+            className="rounded-xl border border-slate-200 bg-white p-2.5 text-slate-600 hover:bg-slate-50 transition dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+          >
+            ←
+          </button>
+          <div>
+            <h2 className="text-3xl font-black text-slate-900 dark:text-white">{dStudent.name}</h2>
+            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+              {dStudent.admissionNumber} • {dStudent.batchName}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700 transition">
+            📈 Predictive Analytics
+          </button>
+          <button
+            onClick={() => void changeEmail(editing)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            ✉ Change Email
+          </button>
+          <button
+            onClick={() => openEdit(editing)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            ✎ Edit
+          </button>
+          <button
+            onClick={() => void resetPassword(editing)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 transition dark:border-slate-700 dark:bg-slate-800"
+          >
+            ⚿ Reset Pw
+          </button>
+          <button
+            onClick={() => void removeStudent(editing)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-amber-600 hover:bg-amber-50 transition dark:border-slate-700 dark:bg-slate-800"
+          >
+            👤 Deactivate
+          </button>
+        </div>
+      </div>
+
+      {/* 2-Column Layout */}
+      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
+        {/* Left Profile Card */}
+        <aside className="space-y-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            {/* Avatar */}
+            <div className="relative mx-auto h-24 w-24">
+              <div className="grid h-full w-full place-items-center rounded-full bg-blue-600 text-3xl font-black text-white shadow-md">
+                {dStudent.name.split(/\s+/).slice(0, 2).map((p: string) => p[0]).join('').toUpperCase() || 'SK'}
+              </div>
+              <span className="absolute bottom-1 right-1 h-4 w-4 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />
+            </div>
+
+            <h3 className="mt-4 text-center text-xl font-black text-slate-900 dark:text-white">
+              {dStudent.name}
+            </h3>
+            <p className="text-center text-xs text-slate-500 dark:text-slate-400">
+              {dStudent.email}
+            </p>
+
+            <div className="mt-3 text-center text-xs font-black text-blue-600 dark:text-blue-400">
+              • {dStudent.admissionNumber} • {dStudent.batchName}
+            </div>
+
+            {/* Status Chips */}
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300">
+                • {dStudent.status}
+              </span>
+              <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300">
+                ⚠ {dKpis.riskLevel} Risk
+              </span>
+              <span className="rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600 border border-rose-200 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300">
+                🩸 {dStudent.bloodGroup}
+              </span>
+              <span className="rounded-full bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
+                📅 Enrolled: {dStudent.enrolledDate}
+              </span>
+            </div>
+
+            {/* 3 KPI Blocks */}
+            <div className="mt-6 grid grid-cols-3 divide-x divide-slate-100 rounded-2xl bg-slate-50/80 p-4 text-center dark:divide-slate-800 dark:bg-slate-800/40">
+              <div>
+                <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
+                  {dKpis.attendanceRate}%
+                </div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  ATTEND.
+                </div>
+              </div>
+              <div>
+                <div className="text-xl font-black text-rose-600 dark:text-rose-400">
+                  {dKpis.scoreRate}%
+                </div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  SCORE
+                </div>
+              </div>
+              <div>
+                <div className="text-xl font-black text-amber-500 dark:text-amber-400">
+                  {dKpis.riskScore}
+                </div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  RISK
+                </div>
+              </div>
+            </div>
+
+            {/* Personal Details */}
+            <div className="mt-6 space-y-3 divide-y divide-slate-100 text-xs dark:divide-slate-800">
+              <div className="flex items-center justify-between pt-3">
+                <span className="text-slate-500 flex items-center gap-1.5">📞 Phone</span>
+                <b className="text-slate-800 dark:text-slate-200">{dStudent.phone}</b>
+              </div>
+              <div className="flex items-center justify-between pt-3">
+                <span className="text-slate-500 flex items-center gap-1.5">✉ Student email</span>
+                <b className="text-slate-800 dark:text-slate-200">{dStudent.email}</b>
+              </div>
+              <div className="flex items-center justify-between pt-3">
+                <span className="text-slate-500 flex items-center gap-1.5">👤 Father</span>
+                <b className="text-slate-800 dark:text-slate-200">{dStudent.fatherName}</b>
+              </div>
+              <div className="flex items-center justify-between pt-3">
+                <span className="text-slate-500 flex items-center gap-1.5">📅 DOB</span>
+                <b className="text-slate-800 dark:text-slate-200">{dStudent.dateOfBirth}</b>
+              </div>
+              <div className="flex items-center justify-between pt-3">
+                <span className="text-slate-500 flex items-center gap-1.5">📋 Enrollment Date</span>
+                <b className="text-slate-800 dark:text-slate-200">{dStudent.enrolledDate}</b>
+              </div>
+            </div>
+
+            {/* FEE SUMMARY */}
+            <div className="mt-6 border-t border-slate-200 pt-5 dark:border-slate-800">
+              <div className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                FEE SUMMARY
+              </div>
+              <div className="mt-3 space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Total Billed</span>
+                  <b className="text-slate-800 dark:text-slate-200">{money(dFee.totalBilled)}</b>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Paid</span>
+                  <b className="text-emerald-600 dark:text-emerald-400">{money(dFee.paid)}</b>
+                </div>
+                <div className="flex justify-between border-t border-slate-100 pt-2 dark:border-slate-800">
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Due</span>
+                  <b className="text-orange-600 dark:text-orange-400 font-black">{money(dFee.due)}</b>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* Right Tabbed Panel */}
+        <section className="space-y-6">
+          {/* Top Tabs */}
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            {[
+              { key: 'attendance', label: 'Attendance', icon: '📋' },
+              { key: 'fees', label: 'Tuition Fees', icon: '💳' },
+              { key: 'results', label: 'Results', icon: '📊' },
+              { key: 'exams', label: 'Exams', icon: '📝' },
+              { key: 'documents', label: 'Documents', icon: '📁' },
+            ].map(tab => {
+              const active = detailTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setDetailTab(tab.key as any)}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${
+                    active
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span>{tab.icon}</span>
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Attendance Tab Content */}
+          {detailTab === 'attendance' && (
+            <div className="space-y-6">
+              {/* Monthly Attendance Card */}
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    Monthly Attendance — October 2026
+                  </h3>
+                  <div className="flex items-center gap-3">
+                    <select className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                      <option>October</option>
+                      <option>September</option>
+                      <option>August</option>
+                    </select>
+                    <select className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                      <option>2026</option>
+                      <option>2025</option>
+                    </select>
+                    <span className="text-lg font-black text-emerald-600 dark:text-emerald-400">
+                      100%
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4 Stat Tiles */}
+                <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4 text-center dark:border-slate-800 dark:bg-slate-800/40">
+                    <div className="text-2xl font-black text-blue-600">{dStats.total}</div>
+                    <div className="mt-1 text-[10px] font-black uppercase text-slate-500">TOTAL</div>
+                  </div>
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 text-center dark:border-slate-800 dark:bg-slate-800/40">
+                    <div className="text-2xl font-black text-emerald-600">{dStats.present}</div>
+                    <div className="mt-1 text-[10px] font-black uppercase text-slate-500">PRESENT</div>
+                  </div>
+                  <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-4 text-center dark:border-slate-800 dark:bg-slate-800/40">
+                    <div className="text-2xl font-black text-rose-600">{dStats.absent}</div>
+                    <div className="mt-1 text-[10px] font-black uppercase text-slate-500">ABSENT</div>
+                  </div>
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4 text-center dark:border-slate-800 dark:bg-slate-800/40">
+                    <div className="text-2xl font-black text-amber-500">{dStats.late}</div>
+                    <div className="mt-1 text-[10px] font-black uppercase text-slate-500">LATE</div>
+                  </div>
+                </div>
+
+                {/* Monthly Attendance Rate Bar */}
+                <div className="mt-6">
+                  <div className="flex justify-between text-xs font-bold">
+                    <span className="text-slate-500">Monthly Attendance Rate</span>
+                    <span className="text-emerald-600">100%</span>
+                  </div>
+                  <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: '100%' }} />
+                  </div>
+                </div>
+
+                {/* Day Calendar Row (Days 1 to 31) */}
+                <div className="mt-6 overflow-x-auto pb-2">
+                  <div className="grid min-w-[720px] grid-cols-16 gap-1 text-center text-[10px]">
+                    {dMonthlyDays.slice(0, 16).map((d: any) => {
+                      const isPresent = d.status === 'Present';
+                      return (
+                        <div
+                          key={d.day}
+                          className={`rounded-lg p-2 border font-bold ${
+                            isPresent
+                              ? 'border-emerald-300 bg-emerald-100 text-emerald-800'
+                              : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-slate-800 dark:bg-slate-800/40'
+                          }`}
+                        >
+                          <span className="block text-[8px] text-slate-400 uppercase">DAY</span>
+                          <span>{d.day}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-1.5 grid min-w-[720px] grid-cols-15 gap-1 text-center text-[10px]">
+                    {dMonthlyDays.slice(16, 31).map((d: any) => {
+                      const isPresent = d.status === 'Present';
+                      const isAbsent = d.status === 'Absent';
+                      return (
+                        <div
+                          key={d.day}
+                          className={`rounded-lg p-2 border font-bold ${
+                            isPresent
+                              ? 'border-emerald-300 bg-emerald-100 text-emerald-800'
+                              : isAbsent
+                              ? 'border-rose-300 bg-rose-100 text-rose-800'
+                              : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-slate-800 dark:bg-slate-800/40'
+                          }`}
+                        >
+                          <span className="block text-[8px] text-slate-400 uppercase">DAY</span>
+                          <span>{d.day}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Calendar Legend */}
+                <div className="mt-4 flex flex-wrap items-center gap-4 text-xs font-semibold text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <i className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Present
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <i className="h-2.5 w-2.5 rounded-full bg-rose-500" /> Absent
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <i className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Late
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <i className="h-2.5 w-2.5 rounded-full bg-slate-300" /> No record
+                  </span>
+                </div>
+              </div>
+
+              {/* Subject-wise Cards */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                {dSubjectCards.map((sub: any) => {
+                  if (!sub.enrolled) {
+                    return (
+                      <div
+                        key={sub.id}
+                        className="rounded-2xl border border-slate-200 p-5 shadow-sm dark:border-slate-800"
+                        style={{
+                          backgroundImage:
+                            'repeating-linear-gradient(45deg, rgba(148,163,184,0.1), rgba(148,163,184,0.1) 8px, transparent 8px, transparent 16px)',
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-slate-600 dark:text-slate-300">{sub.name}</h4>
+                          <span className="rounded-full bg-slate-200 px-2.5 py-1 text-[10px] font-bold text-slate-600">
+                            Not Enrolled
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-400">Student is not enrolled in this subject.</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div
+                      key={sub.id}
+                      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-black text-slate-900 dark:text-white">{sub.name}</h4>
+                          <p className="text-xs text-slate-500">Teacher: {sub.teacher}</p>
+                        </div>
+                        <span className="text-lg font-black text-emerald-600 dark:text-emerald-400">
+                          {sub.percent}%
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                        <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-800">
+                          <b className="block text-slate-800 dark:text-slate-200">{sub.held}</b>
+                          <span className="text-[10px] text-slate-400">Held</span>
+                        </div>
+                        <div className="rounded-xl bg-emerald-50 p-2 dark:bg-emerald-950/40">
+                          <b className="block text-emerald-600">{sub.attended}</b>
+                          <span className="text-[10px] text-emerald-700">Attended</span>
+                        </div>
+                        <div className="rounded-xl bg-rose-50 p-2 dark:bg-rose-950/40">
+                          <b className="block text-rose-600">{sub.missed}</b>
+                          <span className="text-[10px] text-rose-700">Missed</span>
+                        </div>
+                      </div>
+                      <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-500"
+                          style={{ width: `${sub.percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Class Log Table */}
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+                  <h4 className="font-bold text-slate-900 dark:text-white">Class Join & Attendance Log</h4>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-5 py-3">Date</th>
+                        <th className="px-5 py-3">Subject</th>
+                        <th className="px-5 py-3">Teacher</th>
+                        <th className="px-5 py-3">Time</th>
+                        <th className="px-5 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {dClassLog.map((log: any) => (
+                        <tr key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
+                          <td className="px-5 py-3 font-semibold text-slate-800 dark:text-slate-200">{log.date}</td>
+                          <td className="px-5 py-3 font-bold text-slate-900 dark:text-white">{log.subjectName}</td>
+                          <td className="px-5 py-3 text-slate-500">{log.teacherName}</td>
+                          <td className="px-5 py-3 text-slate-500">{log.time}</td>
+                          <td className="px-5 py-3">
+                            <span className="inline-block rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400">
+                              ✓ {log.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tuition Fees Tab */}
+          {detailTab === 'fees' && (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Tuition Fees & Payments</h3>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                  <span className="text-xs text-slate-500">Total Billed</span>
+                  <div className="text-2xl font-black text-slate-800 dark:text-slate-200">{money(dFee.totalBilled)}</div>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-950/40">
+                  <span className="text-xs text-emerald-700">Total Paid</span>
+                  <div className="text-2xl font-black text-emerald-600">{money(dFee.paid)}</div>
+                </div>
+                <div className="rounded-2xl bg-rose-50 p-4 dark:bg-rose-950/40">
+                  <span className="text-xs text-rose-700">Balance Due</span>
+                  <div className="text-2xl font-black text-rose-600">{money(dFee.due)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Results / Exams / Documents Tabs */}
+          {['results', 'exams', 'documents'].includes(detailTab) && (
+            <div className="grid min-h-48 place-items-center rounded-3xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div>
+                <p className="font-bold text-slate-700 dark:text-slate-300">
+                  No {detailTab} published for this student yet.
+                </p>
+                <p className="mt-1 text-xs text-slate-400">Records will show automatically once scheduled.</p>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+  if(mode==='bulk')return <section className="mx-auto max-w-2xl rounded-2xl border bg-white p-7 dark:border-slate-800 dark:bg-slate-900"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="mb-4 text-orange-600 hover:underline dark:text-orange-400">← Cancel</button><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">Bulk Update</h2><p className="mb-5 text-slate-500 dark:text-slate-400">{selected.length} selected from the current page.</p>{formError&&<p role="alert" className="mb-4 text-rose-700 dark:text-rose-400">{formError}</p>}<form onSubmit={bulkSave} className="space-y-4"><label className="block text-slate-700 dark:text-slate-300">Batch<select name="batchId" className="mt-1 w-full rounded-xl border p-3 dark:border-slate-700 dark:bg-slate-800"><option value="">Keep current batch</option>{lookups.batches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label className="block text-slate-700 dark:text-slate-300">Status<select name="status" className="mt-1 w-full rounded-xl border p-3 dark:border-slate-700 dark:bg-slate-800"><option value="">Keep current status</option>{['active','inactive','dropped','on hold'].map(x=><option key={x}>{x}</option>)}</select></label><button disabled={!selected.length} className="rounded-xl bg-orange-500 px-6 py-3 font-bold text-white shadow-sm hover:bg-orange-600 transition disabled:opacity-50 active:scale-95">Review & Apply</button></form></section>;
  if(mode==='import')return <section className="mx-auto max-w-4xl space-y-5 rounded-2xl border bg-white p-7 dark:border-slate-800 dark:bg-slate-900"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="text-orange-600 hover:underline dark:text-orange-400">← Back to Students</button><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">Import Students</h2><p className="text-slate-600 dark:text-slate-400">Upload a CSV or XLSX file to preview validation and duplicate-email errors before importing.</p><button onClick={()=>void (async()=>{const response=await fetch('/api/admin/students/import-template',{credentials:'include'});downloadBlob(await response.blob(),'student-import-template.xlsx')})()} className="rounded-lg border px-4 py-2 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-200">Download template</button><input type="file" accept=".csv,.xlsx,.xls" onChange={e=>void chooseImport(e)} className="block dark:text-slate-300"/>{formError&&<p role="alert" className="text-rose-700 dark:text-rose-400">{formError}</p>}{importPreview.length>0&&<div className="max-h-80 overflow-auto rounded-xl border dark:border-slate-800"><table className="w-full text-left text-sm"><thead className="bg-slate-50 dark:bg-slate-800"><tr><th className="p-3">Row</th><th>Email</th><th>Validation</th></tr></thead><tbody>{importPreview.map(row=><tr key={row.row} className="border-t dark:border-slate-800"><td className="p-3">{row.row}</td><td>{row.email}</td><td className={row.errors.length?'text-rose-700':'text-emerald-700'}>{row.errors.join('; ')||'Ready'}</td></tr>)}</tbody></table></div>}<button disabled={!importRows.length||importPreview.some(r=>r.errors.length)||importing} onClick={()=>void runImport()} className="rounded-xl bg-orange-500 px-6 py-3 font-bold text-white shadow-sm hover:bg-orange-600 transition disabled:opacity-50 active:scale-95">{importing?'Importing…':`Import ${importRows.length} students`}</button></section>;
 
  return <div className="space-y-5"><button onClick={()=>{setMode('list');navigate('/admin/students')}} className="rounded-lg border bg-white px-4 py-2 hover:bg-slate-50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">←</button><header><h2 className="text-3xl font-black text-orange-600 dark:text-orange-500">{mode==='edit'?'Edit Student':'Admit New Student'}</h2><p className="text-slate-500 dark:text-slate-400">Fill in the student details below</p></header>{formError&&<div role="alert" className="rounded-xl border border-rose-200 bg-white p-4 text-rose-700 shadow-sm dark:border-rose-900/40 dark:bg-slate-900 dark:text-rose-400">{formError}</div>}<form onSubmit={submit} className="grid gap-6 xl:grid-cols-[2fr_1fr]"><div className="space-y-6"><section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><h3 className="border-b border-orange-100 bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-4 text-xl font-bold text-orange-800 dark:border-slate-800 dark:from-slate-800 dark:to-slate-800 dark:text-orange-400">Personal Information</h3><div className="grid gap-5 p-6 md:grid-cols-2"><div className="flex items-start gap-2"><div className="flex-1"><Field label="Admission Number" value={form.admissionNumber} onChange={v=>update('admissionNumber',v)} hint="Leave as suggested or override."/></div><button type="button" onClick={()=>void refreshAdmission()} aria-label="Refresh admission number" className="mt-7 rounded-xl border px-4 py-3 hover:bg-slate-50 transition dark:border-slate-700">↻</button></div><Field required label="Full Name" value={form.name} onChange={v=>update('name',v)} placeholder="Student full name"/><Field required label="Email Address" type="email" readOnly={mode==='edit'} value={form.email} onChange={v=>update('email',v)} placeholder="student@example.com"/><label className="block text-sm font-bold text-slate-700 dark:text-slate-300">Phone Number <span className="text-rose-600">*</span><div className="mt-2 flex gap-2"><input aria-label="Country calling code" value={form.phoneCountry} onChange={e=>update('phoneCountry',e.target.value.replace(/[^+\d]/g,'').slice(0,4))} className="w-24 rounded-xl border border-slate-300 px-3 py-3 font-normal outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"/><input required value={form.phone} onChange={e=>update('phone',e.target.value)} placeholder="Mobile number" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3 font-normal outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"/></div></label><Field label="Date of Birth" type="date" value={form.dateOfBirth} onChange={v=>update('dateOfBirth',v)}/><SelectField label="Gender" value={form.gender} onChange={v=>update('gender',v)} options={['Male','Female','Other']}/><SelectField label="Blood Group" value={form.bloodGroup} onChange={v=>update('bloodGroup',v)} options={['A+','A−','B+','B−','AB+','AB−','O+','O−']}/><label className="md:col-span-2 text-slate-700 dark:text-slate-300 font-bold text-sm">Address<textarea value={form.address} onChange={e=>update('address',e.target.value)} placeholder="Full address" rows={3} className="mt-1 w-full rounded-xl border border-slate-300 p-3 font-normal outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"/></label></div></section><section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><h3 className="border-b border-orange-100 bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-4 text-xl font-bold text-orange-800 dark:border-slate-800 dark:from-slate-800 dark:to-slate-800 dark:text-orange-400">Parent / Guardian Details</h3><div className="grid gap-5 p-6 md:grid-cols-2"><Field required label="Father's Name" value={form.fatherName} onChange={v=>update('fatherName',v)} placeholder="Father's full name"/><Field label="Mother's Name" value={form.motherName} onChange={v=>update('motherName',v)} placeholder="Mother's full name"/><Field label="Guardian Phone" value={form.guardianPhone} onChange={v=>update('guardianPhone',v)} placeholder="Mobile number"/><Field label="Parent Name (for login)" value={form.parentName} onChange={v=>update('parentName',v)} placeholder="Parent/Guardian name"/><Field label="Parent Email (creates login)" type="email" value={form.parentEmail} onChange={v=>update('parentEmail',v)} placeholder="parent@example.com"/><Field label="Parent Phone" value={form.parentPhone} onChange={v=>update('parentPhone',v)} placeholder="Mobile number"/></div></section></div><aside className="space-y-6"><section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><h3 className="border-b border-orange-100 bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-4 text-xl font-bold text-orange-800 dark:border-slate-800 dark:from-slate-800 dark:to-slate-800 dark:text-orange-400">Academic Details</h3><div className="space-y-5 p-6"><label className="block text-sm font-bold text-slate-700 dark:text-slate-300">COURSE → BATCH<select value={form.batchId} onChange={e=>update('batchId',e.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"><option value="">{lookups.batches.length?'Select a batch…':'No batches yet — admit without a batch'}</option>{lookups.batches.map(b=><option key={b.id} value={b.id}>{b.course_name||lookups.courses.find(c=>c.id===b.course_id)?.name||'Course'} → {b.name}</option>)}</select></label><MultiSelect label="ASSIGN SUBJECTS (MULTIPLE)" placeholder="Search & select subjects..." searchPlaceholder="Search subjects..." options={lookups.subjects.map(s => ({ id: s.id, label: s.name }))} selected={form.subjects} onChange={subs => { update('subjects', subs); if (feeAssignMode === 'subject' && feeSubjectIds.length === 0) setFeeSubjectIds(subs); }} showSelectAll /><div className="rounded-xl border border-orange-200 bg-orange-50/70 p-4 text-sm text-orange-800 dark:border-orange-900/40 dark:bg-orange-950/30 dark:text-orange-300"><b>Default login credentials</b><p className="mt-1">Student and optional parent accounts use the configured default password and must change it on first sign-in. The password is never shown here.</p></div></div></section>

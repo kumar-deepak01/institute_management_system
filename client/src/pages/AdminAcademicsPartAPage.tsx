@@ -1,12 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { assignSubstitute, AttendanceResponse, AttendanceStudent, bulkAttendance, createHoliday, createLeaveBalance, createLeaveType, deleteLeaveRecord, deleteTimetableClass, getAttendance, getAttendanceLookups, getAttendanceReport, getLeaveLookups, getLeaveRequests, getRegularizations, getTimetable, reviewLeave, saveAttendance, saveTeacherAvailability, saveTimetableClass, timetableLookups } from '../services/academicOperations';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { assignSubstitute, createHoliday, createLeaveBalance, createLeaveType, deleteLeaveRecord, deleteTimetableClass, getLiveAttendanceSummary, getLeaveLookups, getLeaveRequests, getRegularizations, getTimetable, reviewLeave, saveTeacherAvailability, saveTimetableClass, timetableLookups } from '../services/academicOperations';
 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const dateLabel = (value: string) => { if (!value) return '—'; const d = new Date(`${value.slice(0,10)}T00:00:00`); return Number.isNaN(d.valueOf()) ? value : d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); };
 const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-const tone: Record<string,string> = { Present:'emerald', Absent:'rose', Late:'amber', Holiday:'yellow', Leave:'orange' };
-const statusClasses:Record<string,string>={emerald:'border-emerald-300 bg-emerald-50/70 text-emerald-700',rose:'border-rose-300 bg-rose-50/70 text-rose-700',amber:'border-amber-300 bg-amber-50/70 text-amber-700',yellow:'border-yellow-300 bg-yellow-50/70 text-yellow-700',orange:'border-orange-300 bg-orange-50/70 text-orange-700',slate:'border-slate-200 bg-white text-slate-700'};
 const typeColors: Record<string,string> = { Lecture:'blue', Lab:'cyan', Doubt:'amber', Test:'rose', Special:'violet' };
 const typeStyles:Record<string,string>={Lecture:'border-blue-500 bg-blue-50',Lab:'border-cyan-500 bg-cyan-50',Doubt:'border-amber-500 bg-amber-50',Test:'border-rose-500 bg-rose-50',Special:'border-violet-500 bg-violet-50'};
 const legendStyles:Record<string,string>={Lecture:'bg-blue-100 text-orange-600',Lab:'bg-cyan-100 text-cyan-700',Doubt:'bg-amber-100 text-amber-700',Test:'bg-rose-100 text-rose-700',Special:'bg-violet-100 text-violet-700'};
@@ -22,19 +20,382 @@ function Modal({title,close,children}:{title:string;close:()=>void;children:Reac
 
 export default function AdminAcademicsPartAPage(){ const {pathname}=useLocation(); const section=pathname.endsWith('/attendance')?'attendance':pathname.endsWith('/timetable')?'timetable':'leave'; return section==='attendance'?<AttendancePage/>:section==='timetable'?<TimetablePage/>:<LeavePage/>; }
 
-const AttendanceCard=memo(function AttendanceCard({student,onSet}:{student:AttendanceStudent;onSet:(key:string,status:string)=>void}){ const status=student.status||'Unmarked',color=tone[status]||'slate';const dot:Record<string,string>={emerald:'bg-emerald-500',rose:'bg-rose-500',amber:'bg-amber-500',yellow:'bg-yellow-500',orange:'bg-orange-500',slate:'bg-slate-400'};return <button onClick={()=>onSet(student.studentKey,({Unmarked:'Present',Present:'Absent',Absent:'Late',Late:'Present'} as Record<string,string>)[status]||'Present')} className={`flex min-h-28 w-full items-start gap-3 rounded-2xl border-2 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md ${statusClasses[color]||statusClasses.slate}`}><span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl bg-orange-500 text-sm font-black text-white">{student.photoUrl?<img loading="lazy" src={student.photoUrl} alt="" className="h-full w-full object-cover"/>:student.name.split(/\s+/).slice(0,2).map(s=>s[0]).join('').toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate font-extrabold text-slate-900">{student.name}</span><span className="mt-1 block truncate text-xs text-slate-500">Admission No: {student.admissionNumber||'—'}</span><span className="block truncate text-xs text-slate-500">Batch: {student.batchName||'—'}</span><span className={`mt-1 inline-block rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-black uppercase ${statusClasses[color]?.split(' ')[2]}`}>{status}</span></span><i className={`mt-1 h-3 w-3 shrink-0 rounded-full ${dot[color]||dot.slate}`}/></button>;});
 
-function AttendancePage(){const [lookups,setLookups]=useState<any>({batches:[]}),[batch,setBatch]=useState(''),[date,setDate]=useState(today),[data,setData]=useState<AttendanceResponse|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[search,setSearch]=useState(''),[query,setQuery]=useState(''),[dirty,setDirty]=useState<Record<string,string>>({}),[busy,setBusy]=useState(false),[modal,setModal]=useState(''),[visibleCount,setVisibleCount]=useState(120);
- const load=useCallback(async()=>{setLoading(!data);setError('');try{const result=await getAttendance(batch,date);setData(result);setDirty({});}catch(e){setError(e instanceof Error?e.message:'Attendance could not be loaded.');}},[batch,date]);
- useEffect(()=>{void getAttendanceLookups().then(setLookups).catch(()=>setLookups({batches:[]}));},[]);useEffect(()=>{const t=setTimeout(()=>setQuery(search.trim().toLowerCase()),200);return()=>clearTimeout(t);},[search]);useEffect(()=>{void load();},[load]);
- const students=useMemo(()=>{const all=(data?.students||[]).map(s=>dirty[s.studentKey]?{...s,status:dirty[s.studentKey]}:s);return all.filter(s=>!query||`${s.name} ${s.admissionNumber}`.toLowerCase().includes(query));},[data,dirty,query]);const summary=useMemo(()=>{const rows=(data?.students||[]).map(s=>dirty[s.studentKey]?{...s,status:dirty[s.studentKey]}:s),m={present:0,absent:0,late:0,holiday:0,leave:0,total:rows.length,marked:0,rate:0};rows.forEach(s=>{const k=String(s.status||'').toLowerCase();if(k in m)(m as any)[k]++;});m.marked=m.present+m.absent+m.late;m.rate=m.marked?Math.round(m.present*100/m.marked):0;return m;},[data,dirty]);
- const visibleStudents=students.slice(0,visibleCount);const setOne=(key:string,status:string)=>setDirty(old=>({...old,[key]:status}));const setAll=(status:string)=>{if(status==='Holiday'){setModal('holiday');return;}setDirty(Object.fromEntries((data?.students||[]).filter(s=>!['Leave','Holiday'].includes(s.status||'')).map(s=>[s.studentKey,status])));};
- const save=async()=>{setBusy(true);setError('');try{await saveAttendance(batch,date,Object.entries(dirty).filter(([,status])=>['Present','Absent','Late'].includes(status)).map(([studentKey,status])=>({studentKey,status})));await load();}catch(e){setError(e instanceof Error?e.message:'Attendance could not be saved.');}finally{setBusy(false);}};
- const report=(format:'csv'|'xlsx',from:string,to:string,reportBatch:string,studentKey:string)=>{const qs=new URLSearchParams({from,to,batchId:reportBatch,studentKey});const anchor=document.createElement('a');anchor.href=`/api/admin/academics/attendance/report.${format}?${qs}`;anchor.rel='noopener';anchor.click();};
- const bulk=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);const keys=Object.keys(dirty).length?Object.keys(dirty):students.map(s=>s.studentKey);if(!keys.length)return;setBusy(true);try{await bulkAttendance({batchId:batch,fromDate:String(f.get('from')),toDate:String(f.get('to')),status:String(f.get('status')),studentKeys:keys});setModal('');await load();}catch(e){setError(e instanceof Error?e.message:'Bulk update failed.');}finally{setBusy(false);}};
- return <div><PageHeader title="Attendance" subtitle="Mark and track daily student attendance" actions={<><button onClick={()=>setModal('bulk')} className={`${button} bg-amber-400 text-amber-950 hover:bg-amber-300`}>Bulk Update</button><button onClick={()=>setModal('report')} className={`${button} bg-orange-500 text-white shadow-md hover:bg-orange-600`}><Icon name="grid"/> View Report</button></>}/>{error&&<ErrorBox message={error} retry={()=>void load()}/>}<section className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><Icon name="filter"/><select aria-label="Batch" className={`${inputClass} max-w-64`} value={batch} onChange={e=>setBatch(e.target.value)}><option value="">All Batches</option>{lookups.batches?.map((b:any)=><option key={b.id} value={b.id}>{b.name}</option>)}</select><input aria-label="Attendance date" type="date" value={date} onChange={e=>setDate(e.target.value)} className={`${inputClass} max-w-48`}/><button className={`${button} bg-gradient-to-r from-orange-500 to-orange-600 text-white`} onClick={()=>void load()}><Icon name="calendar"/> Load Attendance</button></section><div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Present" value={summary.present} color="emerald"/><Stat label="Absent" value={summary.absent} color="rose"/><Stat label="Late" value={summary.late} color="amber"/><Stat label="Attendance Rate" value={`${summary.rate}%`} color="blue"/></div><Panel title={`▣  All Students  — ${dateLabel(date)}`} action={<div className="flex gap-2 text-xs font-bold"><span className="rounded-full bg-emerald-100 px-3 py-1.5 text-emerald-800">✓ {summary.present} Present</span><span className="rounded-full bg-rose-100 px-3 py-1.5 text-rose-800">× {summary.absent} Absent</span><span className="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">◷ {summary.late} Late</span></div>}><div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-4"><button className={`${button} bg-emerald-600 text-white`} onClick={()=>setAll('Present')}><Icon name="check"/> All Present</button><button className={`${button} bg-rose-600 text-white`} onClick={()=>setAll('Absent')}><Icon name="close"/> All Absent</button><button className={`${button} border border-amber-300 bg-amber-50 text-amber-800`} onClick={()=>setAll('Holiday')}><Icon name="calendar"/> All Holiday</button><label className="relative ml-3 min-w-56 flex-1"><Icon name="search"/><input className={`${inputClass} pl-10`} placeholder="Search student name or roll..." value={search} onChange={e=>setSearch(e.target.value)}/></label><button disabled={busy||!Object.keys(dirty).length} className={`${button} bg-orange-500 text-white hover:bg-orange-600`} onClick={()=>void save()}>{busy?'Saving…':'Save Attendance'}</button></div>{loading&&!data?<div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">{Array.from({length:6},(_,i)=><div key={i} className="h-28 animate-pulse rounded-2xl bg-slate-100"/>)}</div>:students.length?<div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">{visibleStudents.map(s=><AttendanceCard key={s.studentKey} student={s} onSet={setOne}/>)}</div>:<Empty>{lookups.batches?.length?'No student records match these filters.':'Create batches first to mark attendance.'}</Empty>}{data?.schemaPending&&<p className="border-t bg-amber-50 px-5 py-3 text-xs text-amber-800">Attendance storage migration is pending. Existing records are shown when available.</p>}</Panel>{students.length>visibleStudents.length&&<div className="mt-3 text-center"><button className="text-sm font-bold text-orange-600" onClick={()=>setVisibleCount(v=>v+120)}>Load {Math.min(120,students.length-visibleStudents.length)} more students</button></div>}{modal==='bulk'&&<Modal title="Bulk Attendance Update" close={()=>setModal('')}><form onSubmit={bulk} className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-bold">From date<input required name="from" type="date" defaultValue={date} className={`${inputClass} mt-1`}/></label><label className="text-sm font-bold">To date<input required name="to" type="date" defaultValue={date} className={`${inputClass} mt-1`}/></label><label className="text-sm font-bold">Apply status<select name="status" className={`${inputClass} mt-1`}><option>Present</option><option>Absent</option><option>Late</option></select></label><p className="self-end text-xs text-slate-500">Applies to {Object.keys(dirty).length?Object.keys(dirty).length:students.length} {Object.keys(dirty).length?'changed':'visible'} students.</p><div className="col-span-full flex justify-end gap-2"><button type="button" onClick={()=>setModal('')} className={`${button} border`}>Cancel</button><button disabled={busy} className={`${button} bg-orange-500 text-white hover:bg-orange-600`}>Apply Update</button></div></form></Modal>}{modal==='holiday'&&<HolidayModal batchId={batch} date={date} onClose={()=>setModal('')} onSaved={async()=>{setModal('');await load();}}/>}{modal==='report'&&<AttendanceReportModal lookups={lookups} batchId={batch} date={date} onClose={()=>setModal('')} onExport={report}/>}</div>;
+function AttendancePage() {
+  const navigate = useNavigate();
+  const [batch, setBatch] = useState('');
+  const [date, setDate] = useState('2026-10-25');
+  const [activeTab, setActiveTab] = useState<'design-1'|'design-2'|'design-3'|'design-4'|'design-5'>('design-4');
+  const [summaryData, setSummaryData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await getLiveAttendanceSummary(batch, date);
+      setSummaryData(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load attendance summary');
+    } finally {
+      setLoading(false);
+    }
+  }, [batch, date]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const kpis = summaryData?.kpi || {
+    totalClasses: 41,
+    autoMarkedJoins: 111,
+    avgAttendanceRate: 68,
+    liveClassesToday: 3,
+  };
+
+  const dayRegister = summaryData?.dayRegister || {
+    date: 'Sunday, 25 October 2026',
+    dateStr: '2026-10-25',
+    subjects: ['Physics', 'Chemistry', 'Maths', 'Biology'],
+    rows: []
+  };
+
+  const subjectMatrix = summaryData?.subjectMatrix || [
+    { id: '1', name: 'Physics', teacherName: 'Alok Sir', heldClasses: 14, presentJoins: 11, absentCount: 3, rate: 79 },
+    { id: '2', name: 'Chemistry', teacherName: 'Dr. Verma', heldClasses: 12, presentJoins: 8, absentCount: 4, rate: 67 },
+    { id: '3', name: 'Maths', teacherName: 'R.K. Gupta', heldClasses: 11, presentJoins: 9, absentCount: 2, rate: 82 },
+    { id: '4', name: 'Biology', teacherName: 'Dr. Neha', heldClasses: 4, presentJoins: 2, absentCount: 2, rate: 50 },
+  ];
+
+  const liveClassFeed = summaryData?.liveClassFeed || [];
+  const batchAnalytics = summaryData?.batchAnalytics || [
+    { id: 'alpha', name: 'Batch ALPHA', studentCount: 4, classesHeld: 31, totalJoins: 37, rate: 66 },
+    { id: 'beta', name: 'Batch BETA', studentCount: 1, classesHeld: 10, totalJoins: 8, rate: 80 },
+  ];
+
+  return (
+    <div className="space-y-6 rounded-3xl bg-[#1c140e] p-6 text-white shadow-xl min-h-[85vh]">
+      {loading && <div className="text-xs text-orange-400 animate-pulse font-semibold">Updating live attendance data...</div>}
+      {error && <div className="text-xs text-rose-400 font-semibold">{error}</div>}
+      {/* Top Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white">Attendance</h1>
+          <p className="mt-1 text-sm text-slate-300">
+            Zoom join par automatic mark &bull; sirf dekhne aur analysis ke liye
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={batch}
+            onChange={(e) => setBatch(e.target.value)}
+            className="rounded-xl border border-slate-700 bg-[#2b1f16] px-4 py-2.5 text-sm font-semibold text-white outline-none hover:border-orange-500 focus:border-orange-500"
+          >
+            <option value="">All Batches</option>
+            <option value="e99885bc-17f1-4a0a-bf77-e7fb1cee36df">Batch ALPHA</option>
+            <option value="03ac497f-f981-4926-bec9-f5680823631a">Batch BETA</option>
+          </select>
+          <a
+            href="/student"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-white shadow-md hover:bg-orange-600 transition"
+          >
+            Student Portal Demo
+          </a>
+        </div>
+      </div>
+
+      {/* Design Pills / Tabs */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {[
+          { key: 'design-1', label: 'Design 1: Subject Matrix' },
+          { key: 'design-2', label: 'Design 2: Live Class Feed' },
+          { key: 'design-3', label: 'Design 3: Batch Analytics' },
+          { key: 'design-4', label: 'Design 4: Day Register' },
+          { key: 'design-5', label: 'Design 5: Students and Detail' },
+        ].map((tab) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => {
+                if (tab.key === 'design-5') {
+                  navigate('/admin/students');
+                } else {
+                  setActiveTab(tab.key as any);
+                }
+              }}
+              className={`rounded-full px-5 py-2 text-xs font-bold transition ${
+                isActive
+                  ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20'
+                  : 'bg-[#2b1f16] text-slate-300 hover:bg-[#38281d] hover:text-white border border-slate-850'
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sub-bar / Legend Card */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-[#251a13] px-6 py-4">
+        <div className="font-bold text-white text-sm">
+          Aaj: Sunday, 25 October 2026
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-800/80 bg-emerald-950/70 px-3.5 py-1.5 font-bold text-emerald-400">
+            Present = class join kiya
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-900/80 bg-rose-950/70 px-3.5 py-1.5 font-bold text-rose-400">
+            Absent = class thi par join nahi kiya
+          </span>
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 px-3.5 py-1.5 font-semibold text-slate-400"
+            style={{
+              backgroundImage:
+                'repeating-linear-gradient(45deg, rgba(255,255,255,0.06), rgba(255,255,255,0.06) 6px, transparent 6px, transparent 12px)',
+            }}
+          >
+            Not enrolled = student ne ye subject liya hi nahi
+          </span>
+        </div>
+      </div>
+
+      {/* 4 KPI Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+          <div className="text-4xl font-black text-orange-500">{kpis.totalClasses}</div>
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+            Total classes
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+          <div className="text-4xl font-black text-orange-500">{kpis.autoMarkedJoins}</div>
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+            Auto-marked joins
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+          <div className="text-4xl font-black text-orange-500">{kpis.avgAttendanceRate}%</div>
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+            Average attendance
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+          <div className="text-4xl font-black text-orange-500">{kpis.liveClassesToday}</div>
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+            Live classes aaj
+          </div>
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'design-4' && (
+        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
+          {/* Card Header with Date Picker */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-4">
+            <h2 className="text-base font-bold text-white">
+              Day Register: {dayRegister.date}
+            </h2>
+            <select
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-[#2b1f16] px-3.5 py-1.5 text-xs font-bold text-white outline-none hover:border-orange-500"
+            >
+              <option value="2026-10-25">Sun, 25 Oct 2026</option>
+              <option value="2026-10-24">Sat, 24 Oct 2026</option>
+              <option value="2026-10-23">Fri, 23 Oct 2026</option>
+              <option value="2026-10-22">Thu, 22 Oct 2026</option>
+              <option value="2026-10-21">Wed, 21 Oct 2026</option>
+              <option value="2026-10-20">Tue, 20 Oct 2026</option>
+            </select>
+          </div>
+
+          {/* Day Register Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[780px] text-left text-sm">
+              <thead className="bg-[#1e150f] text-xs font-bold text-slate-400 border-b border-slate-800">
+                <tr>
+                  <th className="px-6 py-4">Student</th>
+                  {dayRegister.subjects.map((sub: string) => (
+                    <th key={sub} className="px-6 py-4 text-center">
+                      {sub}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/80">
+                {dayRegister.rows.map((row: any) => (
+                  <tr key={row.studentId} className="hover:bg-slate-900/30 transition">
+                    <td className="px-6 py-4">
+                      <div className="font-bold text-white">{row.name}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{row.batchName}</div>
+                    </td>
+                    {dayRegister.subjects.map((sub: string) => {
+                      const item = row.subjects?.[sub] || { status: 'Not enrolled' };
+                      if (item.status === 'Present') {
+                        return (
+                          <td key={sub} className="px-6 py-4 text-center">
+                            <span className="inline-block rounded-full border border-emerald-700/60 bg-emerald-950/80 px-3.5 py-1 text-xs font-bold text-emerald-400">
+                              Present
+                            </span>
+                            <span className="block text-[11px] text-slate-400 mt-1">
+                              {item.joinTime || 'joined class'}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (item.status === 'Absent') {
+                        return (
+                          <td key={sub} className="px-6 py-4 text-center">
+                            <span className="inline-block rounded-full border border-rose-800/60 bg-rose-950/80 px-3.5 py-1 text-xs font-bold text-rose-400">
+                              Absent
+                            </span>
+                            <span className="block text-[11px] text-slate-400 mt-1">
+                              {item.classTime || 'class 10:30 AM'}
+                            </span>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={sub} className="px-4 py-3 text-center">
+                          <div
+                            className="h-12 w-full rounded-xl flex items-center justify-center text-xs font-semibold text-slate-400/70 border border-slate-800/50"
+                            style={{
+                              backgroundImage:
+                                'repeating-linear-gradient(45deg, rgba(255,255,255,0.04), rgba(255,255,255,0.04) 8px, transparent 8px, transparent 16px)',
+                            }}
+                          >
+                            Not enrolled
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Tab 1: Subject Matrix */}
+      {activeTab === 'design-1' && (
+        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
+          <div className="border-b border-slate-800 px-6 py-4">
+            <h2 className="text-base font-bold text-white">Subject-wise Attendance Matrix</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#1e150f] text-xs font-bold text-slate-400 border-b border-slate-800">
+                <tr>
+                  <th className="px-6 py-3.5">Subject</th>
+                  <th className="px-6 py-3.5">Teacher</th>
+                  <th className="px-6 py-3.5 text-center">Classes Held</th>
+                  <th className="px-6 py-3.5 text-center">Present Joins</th>
+                  <th className="px-6 py-3.5 text-center">Absent</th>
+                  <th className="px-6 py-3.5">Attendance Rate</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/80">
+                {subjectMatrix.map((sub: any) => (
+                  <tr key={sub.id} className="hover:bg-slate-900/30 transition">
+                    <td className="px-6 py-4 font-bold text-white">{sub.name}</td>
+                    <td className="px-6 py-4 text-slate-300">{sub.teacherName}</td>
+                    <td className="px-6 py-4 text-center font-semibold">{sub.heldClasses}</td>
+                    <td className="px-6 py-4 text-center font-semibold text-emerald-400">{sub.presentJoins}</td>
+                    <td className="px-6 py-4 text-center font-semibold text-rose-400">{sub.absentCount}</td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-2 w-32 rounded-full bg-slate-800 overflow-hidden">
+                          <div className="h-full bg-orange-500 rounded-full" style={{ width: `${sub.rate}%` }} />
+                        </div>
+                        <span className="font-bold text-orange-400">{sub.rate}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Tab 2: Live Class Feed */}
+      {activeTab === 'design-2' && (
+        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
+          <div className="border-b border-slate-800 px-6 py-4">
+            <h2 className="text-base font-bold text-white">Live Class Zoom Feed (Auto-Joins)</h2>
+          </div>
+          <div className="divide-y divide-slate-800/80 max-h-[500px] overflow-y-auto">
+            {liveClassFeed.length ? (
+              liveClassFeed.map((feed: any) => (
+                <div key={feed.id} className="flex items-center justify-between p-4 px-6 hover:bg-slate-900/30 transition">
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-500/20 text-orange-400 font-bold text-xs">
+                      {feed.studentName?.slice(0, 2).toUpperCase()}
+                    </span>
+                    <div>
+                      <div className="font-bold text-white">{feed.studentName}</div>
+                      <div className="text-xs text-slate-400">
+                        {feed.batchName} &bull; {feed.subjectName} &bull; {feed.classTitle}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="inline-block rounded-full bg-emerald-950/80 border border-emerald-700/60 px-3 py-1 text-xs font-bold text-emerald-400">
+                      ✓ Joined
+                    </span>
+                    <span className="block text-[11px] text-slate-400 mt-1">
+                      {feed.joinedAt ? new Date(feed.joinedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : ''}
+                    </span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="p-8 text-center text-sm text-slate-400">No joins recorded today yet.</div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Tab 3: Batch Analytics */}
+      {activeTab === 'design-3' && (
+        <section className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {batchAnalytics.map((b: any) => (
+              <div key={b.id} className="rounded-2xl border border-slate-800 bg-[#251a13] p-6 shadow-md">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-black text-white">{b.name}</h3>
+                  <span className="rounded-full bg-orange-500/20 border border-orange-500/30 px-3 py-1 text-xs font-bold text-orange-400">
+                    {b.studentCount} Students
+                  </span>
+                </div>
+                <div className="mt-5 grid grid-cols-3 gap-3 text-center border-t border-slate-800/80 pt-4">
+                  <div>
+                    <div className="text-2xl font-bold text-white">{b.classesHeld}</div>
+                    <div className="text-[11px] text-slate-400 mt-1">Classes Held</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-emerald-400">{b.totalJoins}</div>
+                    <div className="text-[11px] text-slate-400 mt-1">Total Joins</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-orange-500">{b.rate}%</div>
+                    <div className="text-[11px] text-slate-400 mt-1">Attendance</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
 }
-function AttendanceReportModal({lookups,batchId,date,onClose,onExport}:{lookups:any;batchId:string;date:string;onClose:()=>void;onExport:(format:'csv'|'xlsx',from:string,to:string,batch:string,student:string)=>void}){const [from,setFrom]=useState(date),[to,setTo]=useState(date),[batch,setBatch]=useState(batchId),[studentKey,setStudentKey]=useState(''),[records,setRecords]=useState<any[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState(''),[loaded,setLoaded]=useState(false);const load=async(e?:React.FormEvent)=>{e?.preventDefault();setLoading(true);setError('');try{const result=await getAttendanceReport({from,to,batchId:batch,studentKey});setRecords(result.records);setLoaded(true);}catch(err){setError(err instanceof Error?err.message:'Attendance report could not be loaded.');}finally{setLoading(false);}};const grouped=useMemo(()=>{const map=new Map<string,any>();for(const r of records){const item=map.get(r.studentKey)||{studentKey:r.studentKey,name:r.name,admissionNumber:r.admissionNumber,marked:0,present:0};if(['Present','Absent','Late'].includes(r.status)){item.marked++;if(r.status==='Present')item.present++;}map.set(r.studentKey,item);}return [...map.values()];},[records]);return <Modal title="Attendance Report" close={onClose}><form onSubmit={load} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><label className="text-xs font-bold">FROM<input type="date" value={from} onChange={e=>setFrom(e.target.value)} className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">TO<input type="date" value={to} onChange={e=>setTo(e.target.value)} className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">BATCH<select value={batch} onChange={e=>setBatch(e.target.value)} className={`${inputClass} mt-1`}><option value="">All Batches</option>{lookups.batches?.map((b:any)=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label className="text-xs font-bold">STUDENT<select value={studentKey} onChange={e=>setStudentKey(e.target.value)} className={`${inputClass} mt-1`}><option value="">All Students</option>{lookups.students?.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><div className="col-span-full flex flex-wrap justify-between gap-2"><button className={`${button} bg-orange-500 text-white hover:bg-orange-600`}>{loading?'Loading…':'View Report'}</button><div className="flex gap-2"><button type="button" onClick={()=>onExport('csv',from,to,batch,studentKey)} className={`${button} border border-orange-200 text-orange-600`}><Icon name="download"/> Export CSV</button><button type="button" onClick={()=>onExport('xlsx',from,to,batch,studentKey)} className={`${button} border border-orange-200 text-orange-600`}><Icon name="download"/> Export XLSX</button></div></div></form>{error&&<p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}<div className="mt-5 max-h-[45vh] overflow-auto rounded-xl border">{loaded&&grouped.length?<table className="w-full text-left text-sm"><thead className="sticky top-0 bg-blue-50 text-xs uppercase"><tr><th className="p-3">Student</th><th className="p-3">Admission No.</th><th className="p-3">Present / Marked</th><th className="p-3">Rate</th></tr></thead><tbody className="divide-y">{grouped.map(r=><tr key={r.studentKey}><td className="p-3 font-bold">{r.name}</td><td className="p-3">{r.admissionNumber||'—'}</td><td className="p-3">{r.present} / {r.marked}</td><td className="p-3">{r.marked?Math.round(r.present*100/r.marked):0}%</td></tr>)}</tbody></table>:loaded?<Empty>No attendance records found for these filters.</Empty>:<Empty>Choose the date range and select View Report.</Empty>}</div></Modal>;}
+
 function HolidayModal({batchId,date,onClose,onSaved,batches=[],record}:{batchId:string;date:string;onClose:()=>void;onSaved:()=>void;batches?:any[];record?:any}){const [busy,setBusy]=useState(false),[error,setError]=useState('');return <Modal title={record?'Edit Holiday':'Add Holiday'} close={onClose}><form className="grid gap-4 sm:grid-cols-2" onSubmit={async e=>{e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true);setError('');try{await createHoliday({id:record?.id,title:f.get('title'),startDate:f.get('from'),endDate:f.get('to'),batchId:f.get('batchId')||batchId,reason:f.get('reason')});onSaved();}catch(e){setError(e instanceof Error?e.message:'Holiday could not be saved.');}finally{setBusy(false);}}}><label className="text-sm font-bold">Holiday name<input required name="title" defaultValue={record?.title||''} className={`${inputClass} mt-1`}/></label><label className="text-sm font-bold">Batch<select name="batchId" defaultValue={record?.batchId||batchId} className={`${inputClass} mt-1`}><option value="">All batches</option>{batches.map((b:any)=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label className="text-sm font-bold">From<input required name="from" type="date" defaultValue={record?.startDate||date} className={`${inputClass} mt-1`}/></label><label className="text-sm font-bold">To<input required name="to" type="date" defaultValue={record?.endDate||date} className={`${inputClass} mt-1`}/></label><label className="text-sm font-bold sm:col-span-2">Reason<input name="reason" defaultValue={record?.reason||''} className={`${inputClass} mt-1`}/></label>{error&&<p role="alert" className="text-sm text-rose-700 sm:col-span-2">{error}</p>}<div className="sm:col-span-2 flex justify-end gap-2"><button type="button" onClick={onClose} className={`${button} border`}>Cancel</button><button disabled={busy} className={`${button} bg-orange-500 text-white hover:bg-orange-600`}>{busy?'Saving…':record?'Save Holiday':'Add Holiday'}</button></div></form></Modal>;}
 
 function TimetablePage(){
