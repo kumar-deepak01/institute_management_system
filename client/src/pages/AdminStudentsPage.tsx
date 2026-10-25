@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 're
 import { useLocation, useNavigate } from 'react-router-dom';
 import imageCompression from 'browser-image-compression';
 import { apiRequest } from '../services/api';
+import { financePost } from '../services/finance';
 import AdminIcon from '../components/AdminIcon';
 import MultiSelect from '../components/MultiSelect';
 
@@ -53,15 +54,12 @@ export default function AdminStudentsPage(){
       let feeMessage = '';
       if (mode === 'new' && feeAssignMode !== 'none' && feeStructureId) {
         try {
-          const assignRes = await apiRequest<{ created?: number; warning?: string }>('/api/admin/finance/fees/assign', {
-            method: 'POST',
-            body: {
-              structureId: feeStructureId,
-              scope: feeAssignMode === 'subject' ? 'subject' : 'student',
-              studentKeys: [result.record.id],
-              subjectIds: feeAssignMode === 'subject' ? feeSubjectIds : [],
-              dueDate: feeDueDate || null,
-            },
+          const assignRes = await financePost<{ created?: number; warning?: string }>('/fees/assign', {
+            structureId: feeStructureId,
+            scope: feeAssignMode === 'subject' ? 'subject' : 'student',
+            studentKeys: [result.record.id],
+            subjectIds: feeAssignMode === 'subject' ? feeSubjectIds : [],
+            dueDate: feeDueDate || null,
           });
           feeMessage = assignRes.warning ? ` (${assignRes.warning})` : ' Fee structure assigned.';
         } catch (feeErr) {

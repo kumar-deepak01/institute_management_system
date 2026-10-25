@@ -184,7 +184,7 @@ async function route(req, res, url, input, actor, session) {
             studentKeys=Array.isArray(input.studentKeys)?input.studentKeys.map(x=>clean(x,100)).slice(0,500):[],
             subjectIds=Array.isArray(input.subjectIds)?input.subjectIds.map(x=>clean(x,80)).slice(0,500):(input.subjectId?[clean(input.subjectId,80)]:[]),
             dueDate=input.dueDate||null;
-      if (!structureId || !['course','batch','student','subject'].includes(scope) || !validDate(dueDate)) {
+      if (!structureId || !['course','batch','student','subject'].includes(scope) || (dueDate && !validDate(dueDate))) {
         return json(res,400,{error:'Check the fee structure assignment fields.'});
       }
       const client=await pool.connect();
@@ -250,7 +250,9 @@ async function route(req, res, url, input, actor, session) {
           });
         }
 
-        const effectiveDueDate = dueDate || row.due_date || new Date().toISOString().slice(0, 10);
+        const effectiveDueDate = (dueDate && validDate(dueDate))
+          ? dueDate
+          : (row.due_date ? (row.due_date instanceof Date ? row.due_date.toISOString().slice(0, 10) : String(row.due_date).slice(0, 10)) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10));
         const primarySubjectId = subjectIds[0] || null;
         let createdCount = 0;
 

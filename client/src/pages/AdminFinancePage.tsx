@@ -176,7 +176,7 @@ function Dialog({
   children,
   width = 'max-w-2xl',
 }: {
-  title: string;
+  title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   width?: string;
@@ -192,12 +192,14 @@ function Dialog({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={typeof title === 'string' ? title : 'Dialog'}
         className={`max-h-[92vh] w-full ${width} overflow-y-auto rounded-2xl bg-white shadow-2xl`}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between bg-gradient-to-r from-orange-500 to-orange-600 px-5 py-4 text-white">
-          <h2 className="text-lg font-bold">{title}</h2>
-          <button aria-label="Close" onClick={onClose} className="rounded-lg p-1.5 hover:bg-white/10">
+          <div className="flex-1 min-w-0 pr-3">
+            {typeof title === 'string' ? <h2 className="text-lg font-bold">{title}</h2> : title}
+          </div>
+          <button aria-label="Close" onClick={onClose} className="rounded-lg p-1.5 hover:bg-white/10 text-white/80 hover:text-white transition">
             <AdminIcon name="close" className="h-5 w-5" />
           </button>
         </header>
@@ -303,6 +305,7 @@ export default function AdminFinancePage() {
     [refresh, setRefresh] = useState(0);
   const [modal, setModal] = useState(''),
     [selected, setSelected] = useState<FinanceItem | null>(null),
+    [selectedPayment, setSelectedPayment] = useState<FinanceItem | null>(null),
     [saving, setSaving] = useState(false),
     [csvFile, setCsvFile] = useState<File | null>(null);
 
@@ -354,6 +357,30 @@ export default function AdminFinancePage() {
   }, [search]);
 
   const pageTitle = titleFor(path);
+  const resolvedAcademicYear = useMemo<string>(() => {
+    const target = selected;
+    if (!target) return '2025-26';
+    if (target.academic_year) return String(target.academic_year);
+    if (target.academic_year_name) return String(target.academic_year_name);
+    if (target.academic_year_id) {
+      const found = lookups.academicYears.find(y => String(y.id) === String(target.academic_year_id));
+      if (found) return String(found.name || '2025-26');
+    }
+    const studentBatch = lookups.batches.find(b => String(b.id) === String(target.batch_id || target.batchId));
+    if (studentBatch) {
+      const rawBatch = studentBatch as Record<string, unknown>;
+      const batchYearId = rawBatch.academic_year_id || rawBatch.academicYearId || (rawBatch.record_json as Record<string, unknown> | undefined)?.academicYearId;
+      if (batchYearId) {
+        const found = lookups.academicYears.find(y => String(y.id) === String(batchYearId));
+        if (found) return String(found.name || '2025-26');
+      }
+    }
+    const activeYear = lookups.academicYears.find(y => y.status === 'active') || lookups.academicYears[0];
+    if (activeYear?.name && !String(activeYear.name).toLowerCase().includes('deepak')) {
+      return String(activeYear.name);
+    }
+    return '2025-26';
+  }, [selected, lookups.academicYears, lookups.batches]);
   const showNotice = useCallback((kind: 'success' | 'error', text: string) => {
     setNotice({ kind, text });
     window.setTimeout(() => setNotice(null), 5000);
@@ -547,6 +574,7 @@ export default function AdminFinancePage() {
   const closeModal = () => {
     setModal('');
     setSelected(null);
+    setSelectedPayment(null);
     setModalError('');
   };
 
@@ -759,8 +787,8 @@ export default function AdminFinancePage() {
           paidAt: form.paidAt ? new Date(`${form.paidAt}T12:00:00`).toISOString() : undefined,
         });
         showNotice('success', 'Payment recorded and receipt number created.');
-      } else if (modal === 'reverse' && selected) {
-        await financePost(`/payments/${encodeURIComponent(value(selected, 'id'))}/reverse`, {
+      } else if (modal === 'reverse' && (selectedPayment || selected)) {
+        await financePost(`/payments/${encodeURIComponent(value(selectedPayment || selected || undefined, 'id'))}/reverse`, {
           reason: form.reason,
         });
         showNotice('success', 'Payment reversal recorded in the audit log.');
@@ -2523,41 +2551,430 @@ export default function AdminFinancePage() {
         </Dialog>
       )}
 
-      {modal === 'ledger' && (
-        <Dialog title="Student Fee Ledger" onClose={closeModal}>
-          <div className="rounded-xl bg-orange-50 p-4">
-            <b>{value(selected || undefined, 'student_name')}</b>
-            <p className="text-sm text-slate-500">
-              Adm: {value(selected || undefined, 'admission_number', '—')} · {value(selected || undefined, 'title')}
-            </p>
+      {modal === 'ledger' && selected && (
+        <Dialog
+          width="max-w-5xl"
+          onClose={closeModal}
+          title={
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-white/20 text-white shadow-sm">
+                <AdminIcon name="report" className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-white">
+                  Receipt history — {value(selected, 'title')}
+                </h2>
+                <p className="text-xs text-orange-100 font-medium">
+                  {((data.ledger as FinanceItem[] | undefined) || []).length} transaction(s) | Total: {rupees(selected.totalAmount)} | Collected: {rupees(selected.paid)}
+                </p>
+              </div>
+            </div>
+          }
+        >
+          {/* Summary Stat Boxes in Orange theme */}
+          <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">TOTAL BILLED</p>
+              <p className="mt-1 text-lg font-black text-slate-800">{rupees(selected.totalAmount)}</p>
+            </div>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">COLLECTED</p>
+              <p className="mt-1 text-lg font-black text-emerald-600">{rupees(selected.paid)}</p>
+            </div>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">DISCOUNT</p>
+              <p className="mt-1 text-lg font-black text-slate-800">{rupees(selected.discounts || 0)}</p>
+            </div>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">FINE COLLECTED</p>
+              <p className="mt-1 text-lg font-black text-slate-800">{rupees(selected.fines || 0)}</p>
+            </div>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">BALANCE DUE</p>
+              <p className={`mt-1 text-lg font-black ${Number(selected.balance) > 0 ? 'text-rose-600' : 'text-slate-800'}`}>
+                {rupees(selected.balance)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3 shadow-sm">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">STATUS</p>
+              <div className="mt-1.5">
+                <span className={`inline-block rounded px-2.5 py-0.5 text-xs font-black uppercase tracking-wider ${
+                  Number(selected.balance) === 0 ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
+                }`}>
+                  {Number(selected.balance) === 0 ? 'PAID' : 'PENDING'}
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="mt-4 divide-y">
-            {((data.ledger as FinanceItem[] | undefined) || []).length ? (
-              ((data.ledger as FinanceItem[]) || []).map(x => (
-                <div key={value(x, 'id')} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                  <span>
-                    <b>{rupees(x.amount)}</b>
-                    <small className="ml-2 text-slate-500">
-                      {value(x, 'method')} · {displayDate(x.paid_at)} · {value(x, 'receipt_no')}
-                    </small>
-                    {x.reversed_at && <em className="ml-2 text-xs text-rose-700">Reversed</em>}
-                  </span>
-                  {!x.reversed_at && (
-                    <Button
-                      tone="red"
-                      onClick={() => {
-                        setSelected(x);
-                        setModal('reverse');
-                      }}
-                    >
-                      Reverse
-                    </Button>
-                  )}
-                </div>
-              ))
+
+          {/* Transactions Table */}
+          <div className="overflow-x-auto rounded-xl border border-orange-100 shadow-sm">
+            <table className="w-full min-w-[850px] text-left text-sm">
+              <thead className="border-b border-orange-100 bg-orange-50/70 text-[10px] font-black uppercase tracking-wider text-orange-900">
+                <tr>
+                  <th className="px-4 py-3">RECEIPT NUMBER</th>
+                  <th className="px-3 py-3">PAYMENT DATE</th>
+                  <th className="px-3 py-3">PRINCIPAL AMOUNT</th>
+                  <th className="px-3 py-3">FINE ADDED</th>
+                  <th className="px-3 py-3">DISCOUNT</th>
+                  <th className="px-3 py-3">TOTAL COLLECTED</th>
+                  <th className="px-3 py-3">BALANCE</th>
+                  <th className="px-3 py-3">METHOD</th>
+                  <th className="px-3 py-3">STATUS</th>
+                  <th className="px-4 py-3 text-right">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {((data.ledger as FinanceItem[] | undefined) || []).length ? (
+                  ((data.ledger as FinanceItem[]) || []).map(x => (
+                    <tr key={value(x, 'id')} className="hover:bg-orange-50/30">
+                      <td className="px-4 py-3.5">
+                        <span className="inline-block rounded-md border border-orange-200/60 bg-orange-100/70 px-2 py-0.5 font-mono text-xs font-bold text-orange-900">
+                          {value(x, 'receipt_no', '—')}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3.5 text-xs font-medium text-slate-700">
+                        {displayDate(x.paid_at)}
+                      </td>
+                      <td className="px-3 py-3.5 font-bold text-slate-800">
+                        {rupees(x.amount)}
+                      </td>
+                      <td className="px-3 py-3.5 text-xs text-slate-500">
+                        {Number(x.fine_amount) > 0 ? rupees(x.fine_amount) : '—'}
+                      </td>
+                      <td className="px-3 py-3.5 text-xs text-slate-500">
+                        {Number(x.discount_amount) > 0 ? rupees(x.discount_amount) : '—'}
+                      </td>
+                      <td className="px-3 py-3.5 font-black text-orange-600">
+                        {rupees(x.amount)}
+                      </td>
+                      <td className="px-3 py-3.5">
+                        {Number(selected.balance) === 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
+                            ✓ Settled
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-rose-600">
+                            {rupees(selected.balance)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3.5 text-xs font-semibold capitalize text-slate-700">
+                        {value(x, 'method', 'Cash')}
+                      </td>
+                      <td className="px-3 py-3.5">
+                        {x.reversed_at ? (
+                          <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold text-rose-700">
+                            Reversed
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
+                            Paid
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3.5 text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPayment(x);
+                              setModal('receipt');
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-bold text-white shadow-sm shadow-orange-500/20 transition hover:bg-orange-600"
+                          >
+                            <AdminIcon name="report" className="h-3.5 w-3.5" />
+                            Receipt
+                          </button>
+                          {!x.reversed_at && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedPayment(x);
+                                setModal('reverse');
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-600 transition hover:bg-rose-100"
+                            >
+                              <AdminIcon name="trash" className="h-3.5 w-3.5" />
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">
+                      No payments recorded for this fee yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer */}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+            {Number(selected.balance) === 0 ? (
+              <div className="flex items-center gap-2 text-xs font-bold text-emerald-700">
+                <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-100 text-emerald-700">✓</span>
+                This fee particular is fully settled.
+              </div>
             ) : (
-              <Empty title="No payments recorded for this fee yet." />
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
+                Balance Remaining: <b>{rupees(selected.balance)}</b>
+              </div>
             )}
+            <button
+              type="button"
+              onClick={closeModal}
+              className="rounded-xl border border-slate-300 bg-white px-5 py-2 text-sm font-bold text-slate-700 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
+            >
+              Close
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {modal === 'receipt' && selected && selectedPayment && (
+        <Dialog
+          width="max-w-3xl"
+          onClose={() => setModal('ledger')}
+          title={
+            <div className="flex items-center justify-between w-full pr-4">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModal('ledger')}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-orange-100 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg px-2.5 py-1.5 transition mr-2"
+                >
+                  ← Back to Ledger
+                </button>
+                <span className="text-base font-black text-white">Fee Receipt Preview</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white text-orange-600 hover:bg-orange-50 px-3.5 py-1.5 text-xs font-black shadow-sm transition"
+              >
+                <AdminIcon name="print" className="h-4 w-4" />
+                Print / Save PDF
+              </button>
+            </div>
+          }
+        >
+          <div
+            id="fee-receipt-view"
+            className="rounded-2xl border border-orange-200 bg-white shadow-lg overflow-hidden text-slate-800 print:border-none print:shadow-none"
+          >
+            {/* Top Header Bar */}
+            <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-6 text-white">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="inline-block rounded-xl bg-white p-2 shadow-sm">
+                    <img
+                      src="/mainlogo.png"
+                      alt="My JEE Mentor"
+                      className="h-10 w-auto object-contain"
+                      onError={e => {
+                        e.currentTarget.style.display = 'none';
+                        const fallback = e.currentTarget.parentElement?.querySelector('.logo-fallback') as HTMLElement | null;
+                        if (fallback) fallback.style.display = 'block';
+                      }}
+                    />
+                    <span className="logo-fallback hidden font-black text-base text-orange-600">
+                      My JEE Mentor
+                    </span>
+                  </div>
+                  <p className="mt-3 text-xs font-semibold text-orange-100">
+                    amyjeementor@gmail.com | 7294048814
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] font-black uppercase tracking-widest text-orange-200">
+                    OFFICIAL RECEIPT
+                  </p>
+                  <h1 className="text-2xl font-black tracking-tight text-white mt-0.5">
+                    FEE RECEIPT
+                  </h1>
+                  <div className="mt-2 flex items-center justify-end gap-1.5 text-xs">
+                    <span className="text-orange-200">Receipt No:</span>
+                    <span className="rounded bg-white/20 px-2 py-0.5 font-mono font-black text-white">
+                      {value(selectedPayment, 'receipt_no', '—')}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-orange-100">
+                    Date: {displayDate(selectedPayment.paid_at)}
+                  </p>
+                  <div className="mt-1.5">
+                    <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-[11px] font-bold text-white">
+                      {value(selected, 'installment_no') ? `Instalment ${selected.installment_no}` : 'Instalment 1'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Sub Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-y border-orange-200 bg-orange-50/80 px-6 py-2.5 text-xs font-bold text-orange-950">
+              <div>
+                Fee: <span className="font-extrabold text-slate-900">{value(selected, 'title')}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded border border-orange-200 bg-white px-2.5 py-0.5 text-orange-800 font-bold">
+                  {value(selected, 'fee_type', 'Tuition')}
+                </span>
+                <span className="rounded bg-emerald-100 px-2.5 py-0.5 font-black uppercase text-emerald-800">
+                  {Number(selected.balance) === 0 ? 'PAID' : 'PARTIAL'}
+                </span>
+              </div>
+            </div>
+
+            {/* Two Columns Grid */}
+            <div className="grid gap-4 p-6 sm:grid-cols-2">
+              <div className="rounded-xl border border-orange-200 bg-orange-50/20 p-4">
+                <p className="mb-2 text-[11px] font-black uppercase tracking-wider text-orange-600">
+                  STUDENT DETAILS
+                </p>
+                <p className="text-base font-black text-slate-800">{value(selected, 'student_name')}</p>
+                <div className="mt-2 space-y-1.5 text-xs text-slate-600">
+                  <div>Admission No: <b className="font-semibold text-slate-800">{value(selected, 'admission_number', '—')}</b></div>
+                  <div>Batch: <b className="font-semibold text-slate-800">{value(selected, 'batch_name', '—')}</b></div>
+                  <div>Academic Year: <b className="font-semibold text-slate-800">{resolvedAcademicYear}</b></div>
+                  <div>Fee Due Date: <b className="font-semibold text-slate-800">{displayDate(selected.due_date)}</b></div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-orange-200 bg-orange-50/20 p-4">
+                <p className="mb-2 text-[11px] font-black uppercase tracking-wider text-orange-600">
+                  PAYMENT DETAILS
+                </p>
+                <div className="space-y-1.5 text-xs text-slate-600">
+                  <div>Method: <b className="font-black text-slate-800 capitalize">{value(selectedPayment, 'method', 'Cash')}</b></div>
+                  <div>Payment Date: <b className="font-semibold text-slate-800">{displayDate(selectedPayment.paid_at)}</b></div>
+                  <div>Recorded By: <b className="font-semibold text-slate-800">{value(selectedPayment, 'received_by', 'Deepak').split('@')[0]}</b></div>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    Fee Component: <span className="rounded bg-orange-100 px-2 py-0.5 text-[11px] font-bold text-orange-800">{value(selected, 'fee_type', 'Tuition')}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    Payment Status: <span className="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-bold uppercase text-emerald-800">{Number(selected.balance) === 0 ? 'FULLY PAID' : 'PARTIALLY PAID'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Summary Boxes */}
+            <div className="mx-6 grid grid-cols-2 divide-y rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 p-4 text-center text-white shadow-sm sm:grid-cols-4 sm:divide-x sm:divide-y-0 divide-white/20">
+              <div className="p-2">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-orange-200">TOTAL FEE</p>
+                <p className="mt-1 text-base font-black">{rupees(selected.totalAmount)}</p>
+              </div>
+              <div className="p-2">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-orange-200">ALREADY PAID</p>
+                <p className="mt-1 text-base font-black text-emerald-200">{rupees(selected.paid)}</p>
+              </div>
+              <div className="p-2">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-orange-200">DISCOUNT (FEE)</p>
+                <p className="mt-1 text-base font-black">{rupees(selected.discounts || 0)}</p>
+              </div>
+              <div className="p-2">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-orange-200">BALANCE DUE</p>
+                <p className={`mt-1 text-base font-black ${Number(selected.balance) > 0 ? 'text-amber-200' : 'text-emerald-200'}`}>{rupees(selected.balance)}</p>
+              </div>
+            </div>
+
+            {/* FEE OVERVIEW Table */}
+            <div className="mt-6 px-6">
+              <p className="mb-2 text-[11px] font-black uppercase tracking-wider text-orange-600">
+                FEE OVERVIEW
+              </p>
+              <div className="overflow-hidden rounded-xl border border-orange-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-orange-500 text-white font-bold uppercase text-[10px]">
+                    <tr>
+                      <th className="px-4 py-2.5">Fee Description</th>
+                      <th className="px-3 py-2.5">Type</th>
+                      <th className="px-3 py-2.5">Total Amount</th>
+                      <th className="px-3 py-2.5">Fee-Level Discount</th>
+                      <th className="px-4 py-2.5 text-right">Net Due</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-orange-100 bg-white">
+                    <tr>
+                      <td className="px-4 py-3 font-bold text-slate-800">
+                        {value(selected, 'title')}
+                        <span className="ml-2 inline-block rounded bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-800">
+                          {value(selected, 'installment_no') ? `Instalment ${selected.installment_no}` : 'Instalment 1'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="rounded bg-orange-50 px-2 py-0.5 text-orange-800 font-semibold border border-orange-200">
+                          {value(selected, 'fee_type', 'Tuition')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{rupees(selected.totalAmount)}</td>
+                      <td className="px-3 py-3 text-slate-400">—</td>
+                      <td className="px-4 py-3 text-right font-black text-slate-900">{rupees(selected.totalAmount)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* THIS PAYMENT BREAKDOWN Table */}
+            <div className="mt-6 px-6">
+              <p className="mb-2 text-[11px] font-black uppercase tracking-wider text-orange-600">
+                THIS PAYMENT BREAKDOWN
+              </p>
+              <div className="overflow-hidden rounded-xl border border-orange-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-orange-500 text-white font-bold uppercase text-[10px]">
+                    <tr>
+                      <th className="px-4 py-2.5">Description</th>
+                      <th className="px-4 py-2.5 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-orange-100 bg-white font-semibold text-slate-700">
+                    <tr>
+                      <td className="px-4 py-2.5">1. Principal Amount Collected</td>
+                      <td className="px-4 py-2.5 text-right font-bold text-slate-900">{rupees(selectedPayment.amount)}</td>
+                    </tr>
+                    <tr className="bg-orange-50/40">
+                      <td className="px-4 py-2.5 font-bold text-orange-900">
+                        Net Cash Collected <span className="text-[11px] text-slate-500 font-normal">(Actual Collected)</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-black text-orange-600">{rupees(selectedPayment.amount)}</td>
+                    </tr>
+                    <tr className="bg-emerald-50/50">
+                      <td className="px-4 py-2.5 font-bold text-emerald-800">
+                        {Number(selected.balance) === 0 ? '✓ Fee Fully Paid — No Balance Remaining' : 'Remaining Balance Outstanding'}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-black text-emerald-700">{rupees(selected.balance)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Signatures */}
+            <div className="mt-12 grid grid-cols-2 px-6 pt-6 text-center text-xs font-bold text-slate-600">
+              <div className="mx-6 border-t border-slate-300 pt-2">
+                Student / Parent Signature
+              </div>
+              <div className="mx-6 border-t border-slate-300 pt-2">
+                Authorised Signatory
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="mt-6 border-t border-orange-100 bg-orange-50/30 px-6 py-6 text-center text-xs text-slate-500">
+              <p>This is a computer-generated receipt and does not require a physical signature.</p>
+              <p className="mt-1 font-black text-orange-600">My JEE Mentor</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                Receipt No: <strong className="font-mono text-orange-950">{value(selectedPayment, 'receipt_no', '—')}</strong> • Generated: {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}, {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
+              </p>
+            </div>
           </div>
         </Dialog>
       )}

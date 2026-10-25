@@ -7,7 +7,34 @@ html, body, #root { width: 100%; min-height: 100%; margin: 0; }
 html { scrollbar-gutter: stable; }
 body { min-width: 320px; }
 
-.admin-scrollbar { scrollbar-width: thin; scrollbar-color: #2864ed #eef2f8; }
+.admin-scrollbar { scrollbar-width: thin; scrollbar-color: #f97316 #fff7ed; }
 .admin-scrollbar::-webkit-scrollbar { width: 7px; }
-.admin-scrollbar::-webkit-scrollbar-track { background: #eef2f8; }
-.admin-scrollbar::-webkit-scrollbar-thumb { border-radius: 999px; background: #2864ed; }
+.admin-scrollbar::-webkit-scrollbar-track { background: #fff7ed; }
+.admin-scrollbar::-webkit-scrollbar-thumb { border-radius: 999px; background: #f97316; }
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  body > * {
+    visibility: hidden;
+  }
+  #fee-receipt-view,
+  #fee-receipt-view * {
+    visibility: visible !important;
+  }
+  #fee-receipt-view {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+}
