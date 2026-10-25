@@ -141,7 +141,7 @@ const groups: { name: string; items: AdminNavItem[] }[] = [
   {
     name: 'Finance',
     items: [
-      { label: 'Fee Collection', path: '/admin/fees', icon: 'payment' },
+      { label: 'Fee Collection', path: '/admin/fee-structures', icon: 'payment' },
       { label: 'Fee Structures', path: '/admin/fee-structures', icon: 'grid', nested: true },
       { label: 'Discounts & Coupons', path: '/admin/discounts', icon: 'tag', nested: true },
       { label: 'Late Fee Rules', path: '/admin/late-fees', icon: 'clock', nested: true },

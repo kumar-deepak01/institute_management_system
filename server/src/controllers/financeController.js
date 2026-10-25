@@ -48,31 +48,44 @@ const SQL = {
   feeList: `with ledger as (
     select f.id, f.student_key, f.batch_id, f.structure_id, f.title, f.fee_type_id, f.total_amount,
       f.due_date, f.status, f.installment_no, f.installment_count, f.created_at,
+      f.subject_id, f.subject_ids,
       coalesce(sum(p.amount) filter (where p.reversed_at is null),0)::numeric paid,
       coalesce(sum(p.discount_amount) filter (where p.reversed_at is null),0)::numeric discounts,
       coalesce(sum(p.fine_amount) filter (where p.reversed_at is null),0)::numeric fines
     from public.student_fees f left join public.fee_payments p on p.student_fee_id=f.id
     group by f.id
   )
-  select l.id,l.student_key,l.batch_id,l.structure_id,l.title,l.fee_type_id,l.total_amount,l.due_date,
-    l.installment_no,l.installment_count,l.paid,l.discounts,l.fines,l.created_at,
-    greatest(l.total_amount-l.paid-l.discounts-l.fines,0)::numeric balance,
-    case when greatest(l.total_amount-l.paid-l.discounts-l.fines,0)=0 then 'Paid'
-      when l.paid>0 then 'Partial' when l.due_date<current_date then 'Overdue' else 'Upcoming' end computed_status,
-    s.name student_name,coalesce(s.roll,s.record_json->>'admissionNumber','') admission_number,
-    b.name batch_name,b.course_id,c.name course_name,coalesce(s.status,'active') student_status,
+  select l.id, coalesce(l.student_key, s.id) as student_key, coalesce(l.batch_id, s.batch_id) as batch_id,
+    l.structure_id, coalesce(l.title, 'No fee assigned') as title, l.fee_type_id,
+    coalesce(l.total_amount, 0) as total_amount, l.due_date,
+    l.installment_no, l.installment_count,
+    coalesce(l.paid, 0) as paid, coalesce(l.discounts, 0) as discounts, coalesce(l.fines, 0) as fines,
+    l.created_at, l.subject_id, l.subject_ids,
+    greatest(coalesce(l.total_amount,0)-coalesce(l.paid,0)-coalesce(l.discounts,0)-coalesce(l.fines,0),0)::numeric balance,
+    case
+      when l.id is null then 'Unassigned'
+      when greatest(l.total_amount-l.paid-l.discounts-l.fines,0)=0 then 'Paid'
+      when l.paid>0 then 'Partial'
+      when l.due_date<current_date then 'Overdue'
+      else 'Upcoming'
+    end computed_status,
+    s.name student_name, coalesce(s.roll,s.record_json->>'admissionNumber','') admission_number,
+    b.name batch_name, b.course_id, c.name course_name, coalesce(s.status,'active') student_status,
     coalesce(ft.name,'Tuition') fee_type, count(*) over()::int total_count
-    from ledger l join public.students s on s.id=l.student_key
-  left join public.batches b on b.id=l.batch_id left join public.courses c on c.id=b.course_id
-  left join public.fee_types ft on ft.id=l.fee_type_id
-  where ($1::text='' or s.name ilike '%'||$1||'%' or coalesce(s.roll,s.record_json->>'admissionNumber','') ilike '%'||$1||'%')
-    and ($2::text='' or b.course_id=$2) and ($3::text='' or l.batch_id=$3)
-    and ($4::text='' or l.student_key=$4) and ($5::text='all' or lower(coalesce(s.status,''))=$5)
+  from public.students s
+  left join ledger l on l.student_key = s.id
+  left join public.batches b on b.id = coalesce(l.batch_id, s.batch_id)
+  left join public.courses c on c.id = b.course_id
+  left join public.fee_types ft on ft.id = l.fee_type_id
+  where lower(coalesce(s.status,'active')) not in ('deleted','withdrawn')
+    and ($1::text='' or s.name ilike '%'||$1||'%' or coalesce(s.roll,s.record_json->>'admissionNumber','') ilike '%'||$1||'%')
+    and ($2::text='' or b.course_id=$2) and ($3::text='' or coalesce(l.batch_id, s.batch_id)=$3)
+    and ($4::text='' or s.id=$4) and ($5::text='all' or lower(coalesce(s.status,''))=$5)
     and ($6::text='all' or lower(coalesce(l.fee_type_id,''))=$6)
-    and ($7::text='all' or lower(case when greatest(l.total_amount-l.paid-l.discounts-l.fines,0)=0 then 'paid' when l.paid>0 then 'partial' when l.due_date<current_date then 'overdue' else 'upcoming' end)=$7)
+    and ($7::text='all' or lower(case when l.id is null then 'unassigned' when greatest(l.total_amount-l.paid-l.discounts-l.fines,0)=0 then 'paid' when l.paid>0 then 'partial' when l.due_date<current_date then 'overdue' else 'upcoming' end)=$7)
     and ($8::date is null or l.due_date >= $8::date) and ($9::date is null or l.due_date <= $9::date)
-    and (not $10::boolean or (l.due_date<current_date and greatest(l.total_amount-l.paid-l.discounts-l.fines,0)>0))
-  order by l.due_date nulls last,l.created_at desc limit $11 offset $12`,
+    and (not $10::boolean or (l.due_date<current_date and greatest(coalesce(l.total_amount,0)-coalesce(l.paid,0)-coalesce(l.discounts,0)-coalesce(l.fines,0),0)>0))
+  order by case when l.id is null then 1 else 0 end, l.due_date nulls last, l.created_at desc, s.name limit $11 offset $12`,
   feeStats: `select count(*)::int total_billed_count,
     coalesce(sum(f.total_amount),0)::numeric total_billed,
     coalesce(sum(coalesce(p.paid,0)),0)::numeric collected,
@@ -95,15 +108,25 @@ async function route(req, res, url, input, actor, session) {
     if (method === 'GET' && endpoint === '/api/admin/finance/lookups') {
       const data = await cached('lookups', async () => {
         const q = (sql, values = []) => queryWithLimit(() => pool.query(sql, values));
-        const [students,batches,courses,years,staff,types] = await Promise.all([
-          q("select id,student_id,name,roll,batch_id,status from public.students where lower(coalesce(status,'active')) not in ('deleted','withdrawn') order by name limit 5000"),
+        const [students,batches,courses,years,staff,types,subjects] = await Promise.all([
+          q("select id,student_id,name,roll,batch_id,status,record_json->>'phone' as phone,coalesce(record_json->'subjects', '[]'::jsonb) as subjects from public.students where lower(coalesce(status,'active')) not in ('deleted','withdrawn') order by name limit 5000"),
           q('select id,name,course_id,course_name,active from public.batches where coalesce(active,true) order by name limit 2000'),
           q('select id,name,status from public.courses order by name limit 1000'),
-          q('select id,name,start_date,end_date,status from public.academic_years order by start_date desc nulls last limit 100'),
+          q("select id,name,start_date,end_date,status from public.academic_years where lower(name) not like '%deepak%' and lower(name) not like '%admin%' order by start_date desc nulls last limit 100"),
           q("select staff_key,name,employee_id,status from public.staff where lower(coalesce(status,'')) not in ('inactive','left','terminated') order by name limit 2000"),
           q('select id,name,component_group,badge_color,active from public.fee_types where active=true order by name'),
+          q('select id,name,course_id,status from public.subjects order by name limit 1000'),
         ]);
-        return { students:students.rows, batches:batches.rows, courses:courses.rows, academicYears:years.rows, staff:staff.rows, feeTypes:types.rows };
+        let academicYearsList = years.rows;
+        if (!academicYearsList.length) {
+          academicYearsList = [
+            { id: '2024-25', name: '2024-25', status: 'active' },
+            { id: '2025-26', name: '2025-26', status: 'active' },
+            { id: '2026-27', name: '2026-27', status: 'active' },
+            { id: '2027-28', name: '2027-28', status: 'active' },
+          ];
+        }
+        return { students:students.rows, batches:batches.rows, courses:courses.rows, subjects:subjects.rows, academicYears:academicYearsList, staff:staff.rows, feeTypes:types.rows };
       });
       return json(res,200,data);
     }
@@ -155,33 +178,199 @@ async function route(req, res, url, input, actor, session) {
       }catch(error){await client.query('rollback');if(error.statusCode)return json(res,error.statusCode,{error:'CSV was not imported; no rows were saved.',rowErrors:[{line:Number((error.message.match(/Row (\d+)/)||[])[1])||0,error:error.message}]});throw error;}finally{client.release();}
     }
     if (method === 'POST' && endpoint === '/api/admin/finance/fees/assign') {
-      const structureId=clean(input.structureId,80), scope=clean(input.scope,20), batchIds=Array.isArray(input.batchIds)?input.batchIds.map(x=>clean(x,80)).slice(0,500):[], studentKeys=Array.isArray(input.studentKeys)?input.studentKeys.map(x=>clean(x,100)).slice(0,500):[], courseId=clean(input.courseId,80), dueDate=input.dueDate||null;
-      if (!structureId || !['course','batch','student'].includes(scope) || !validDate(dueDate)) return json(res,400,{error:'Check the fee structure assignment fields.'});
+      const structureId=clean(input.structureId,80),
+            scope=clean(input.scope,20),
+            batchIds=Array.isArray(input.batchIds)?input.batchIds.map(x=>clean(x,80)).slice(0,500):[],
+            studentKeys=Array.isArray(input.studentKeys)?input.studentKeys.map(x=>clean(x,100)).slice(0,500):[],
+            subjectIds=Array.isArray(input.subjectIds)?input.subjectIds.map(x=>clean(x,80)).slice(0,500):(input.subjectId?[clean(input.subjectId,80)]:[]),
+            dueDate=input.dueDate||null;
+      if (!structureId || !['course','batch','student','subject'].includes(scope) || !validDate(dueDate)) {
+        return json(res,400,{error:'Check the fee structure assignment fields.'});
+      }
       const client=await pool.connect();
-      try { await client.query('begin');
+      try {
+        await client.query('begin');
         const structure=await client.query('select * from public.fee_structures where id=$1 and active=true for update',[structureId]);
         if(!structure.rowCount){await client.query('rollback');return json(res,404,{error:'Fee structure was not found.'});}
         const row=structure.rows[0];
-        const inserted=await client.query(`with selected as (
-          select s.id,s.batch_id from public.students s left join public.batches b on b.id=s.batch_id
-          where ($1::text='student' and s.id=any($2::text[])) or ($1::text='batch' and s.batch_id=any($3::text[])) or ($1::text='course' and b.course_id=$4)
-        ), created as (
-          insert into public.student_fees(id,student_key,batch_id,structure_id,title,fee_type_id,total_amount,due_date,status)
-          select gen_random_uuid()::text,s.id,s.batch_id,$5,$6,$7,$8,coalesce($9::date,$10::date),case when coalesce($9::date,$10::date)<current_date then 'overdue' else 'upcoming' end
-          from selected s on conflict do nothing returning id,student_key,batch_id,title,total_amount,due_date
-        ), compatibility_fees as (
-          insert into public.fees(id,student_id,description,amount,due_date,status,record_json)
-          select f.id,f.student_key,f.title,f.total_amount,f.due_date,'pending',jsonb_build_object('_type','app-data','collection','fee','id',f.id,'studentId',f.student_key,'batchId',coalesce(f.batch_id,''),'description',f.title,'amount',f.total_amount,'dueDate',f.due_date,'status','pending','financeFeeId',f.id)
-          from created f on conflict(id) do nothing returning id
-        ), compatibility_records as (
-          insert into public.app_records(source_tab,record_id,record_json)
-          select 'Fees',f.id,jsonb_build_object('_type','app-data','collection','fee','id',f.id,'studentId',f.student_key,'batchId',coalesce(f.batch_id,''),'description',f.title,'amount',f.total_amount,'dueDate',f.due_date,'status','pending','financeFeeId',f.id)
-          from created f on conflict(source_tab,record_id) do nothing returning record_id
-        ) select count(*)::int created_count from created`,[scope,studentKeys,batchIds,courseId,structureId,row.title,row.fee_type_id,row.total_amount,dueDate,row.due_date]);
-        await client.query('commit'); invalidate(); return json(res,201,{created:safeNum(inserted.rows[0]?.created_count)});
-      } catch(error){await client.query('rollback');throw error;} finally{client.release();}
+
+        let targetStudentsQuery = '';
+        let targetParams = [];
+        if (scope === 'student') {
+          if (!studentKeys.length) {
+            await client.query('rollback');
+            return json(res,400,{error:'Please select at least one student.'});
+          }
+          targetStudentsQuery = 'select id, name, batch_id from public.students where id = any($1::text[]) and lower(coalesce(status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+          targetParams = [studentKeys];
+        } else if (scope === 'batch') {
+          if (!batchIds.length) {
+            await client.query('rollback');
+            return json(res,400,{error:'Please select at least one batch.'});
+          }
+          targetStudentsQuery = 'select id, name, batch_id from public.students where batch_id = any($1::text[]) and lower(coalesce(status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+          targetParams = [batchIds];
+        } else if (scope === 'subject') {
+          if (studentKeys.length) {
+            targetStudentsQuery = 'select id, name, batch_id from public.students where id = any($1::text[]) and lower(coalesce(status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+            targetParams = [studentKeys];
+          } else if (batchIds.length) {
+            targetStudentsQuery = 'select id, name, batch_id from public.students where batch_id = any($1::text[]) and lower(coalesce(status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+            targetParams = [batchIds];
+          } else {
+            targetStudentsQuery = 'select id, name, batch_id from public.students where lower(coalesce(status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+            targetParams = [];
+          }
+        } else if (scope === 'course') {
+          const courseId = clean(input.courseId, 80);
+          targetStudentsQuery = 'select s.id, s.name, s.batch_id from public.students s join public.batches b on b.id = s.batch_id where b.course_id = $1 and lower(coalesce(s.status,\'active\')) not in (\'deleted\',\'withdrawn\')';
+          targetParams = [courseId];
+        }
+
+        const targets = (await client.query(targetStudentsQuery, targetParams)).rows;
+        if (!targets.length) {
+          await client.query('rollback');
+          return json(res, 400, { error: 'No matching students found for this assignment.' });
+        }
+
+        // Duplicate prevention
+        const existingFees = await client.query(
+          'select student_key from public.student_fees where structure_id = $1 and student_key = any($2::text[])',
+          [structureId, targets.map(t => t.id)]
+        );
+        const alreadyAssignedSet = new Set(existingFees.rows.map(r => r.student_key));
+        const studentsToAssign = targets.filter(t => !alreadyAssignedSet.has(t.id));
+
+        if (!studentsToAssign.length) {
+          await client.query('rollback');
+          return json(res, 409, {
+            error: `This fee structure (${row.title}) is already assigned to all ${targets.length} selected student(s).`,
+            duplicates: targets.length,
+            created: 0
+          });
+        }
+
+        const effectiveDueDate = dueDate || row.due_date || new Date().toISOString().slice(0, 10);
+        const primarySubjectId = subjectIds[0] || null;
+        let createdCount = 0;
+
+        for (const st of studentsToAssign) {
+          const feeId = id();
+          const feeStatus = effectiveDueDate < new Date().toISOString().slice(0, 10) ? 'overdue' : 'upcoming';
+          await client.query(
+            `insert into public.student_fees(id, student_key, batch_id, structure_id, title, fee_type_id, total_amount, due_date, status, subject_id, subject_ids)
+             values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [feeId, st.id, st.batch_id, structureId, row.title, row.fee_type_id, row.total_amount, effectiveDueDate, feeStatus, primarySubjectId, subjectIds]
+          );
+          const feeObj = {
+            _type: 'app-data',
+            collection: 'fee',
+            id: feeId,
+            studentId: st.id,
+            batchId: st.batch_id || '',
+            description: row.title,
+            amount: Number(row.total_amount),
+            dueDate: effectiveDueDate,
+            status: 'pending',
+            financeFeeId: feeId,
+            subjectId: primarySubjectId,
+            subjectIds: subjectIds,
+          };
+          await client.query(
+            'insert into public.fees(id, student_id, description, amount, due_date, status, record_json) values($1, $2, $3, $4, $5, $6, $7::jsonb) on conflict(id) do nothing',
+            [feeId, st.id, row.title, row.total_amount, effectiveDueDate, 'pending', JSON.stringify(feeObj)]
+          );
+          await client.query(
+            'insert into public.app_records(source_tab, record_id, record_json) values($1, $2, $3::jsonb) on conflict(source_tab, record_id) do nothing',
+            ['Fees', feeId, JSON.stringify(feeObj)]
+          );
+          createdCount++;
+        }
+
+        await client.query('commit');
+        invalidate();
+        const warning = alreadyAssignedSet.size > 0
+          ? `${createdCount} student(s) assigned. ${alreadyAssignedSet.size} student(s) skipped (already had this fee structure).`
+          : undefined;
+        return json(res, 201, { created: createdCount, duplicates: alreadyAssignedSet.size, warning });
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
     }
     let match;
+    
+    if (method === 'PUT' && (match=endpoint.match(/^\/api\/admin\/finance\/fees\/([^/]+)$/))) {
+      const feeId = clean(decodeURIComponent(match[1]), 80);
+      const title = clean(input.title, 120);
+      const amount = String(input.amount ?? '');
+      const dueDate = input.dueDate || null;
+      const structureId = clean(input.structureId, 80) || null;
+      const subjectIds = Array.isArray(input.subjectIds) ? input.subjectIds.map(x => clean(x, 80)).slice(0, 500) : (input.subjectId ? [clean(input.subjectId, 80)] : []);
+      const primarySubjectId = subjectIds[0] || null;
+
+      if (!validAmount(amount) || !validDate(dueDate)) {
+        return json(res, 400, { error: 'Please enter a valid amount and due date.' });
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        const found = await client.query('select * from public.student_fees where id = $1 for update', [feeId]);
+        if (!found.rowCount) {
+          await client.query('rollback');
+          return json(res, 404, { error: 'Fee record was not found.' });
+        }
+        const fee = found.rows[0];
+        const totals = await client.query(
+          'select coalesce(sum(amount) filter (where reversed_at is null), 0)::numeric as paid, coalesce(sum(discount_amount) filter (where reversed_at is null), 0)::numeric as discounts, coalesce(sum(fine_amount) filter (where reversed_at is null), 0)::numeric as fines from public.fee_payments where student_fee_id = $1',
+          [feeId]
+        );
+        const paid = safeNum(totals.rows[0]?.paid);
+        const discounts = safeNum(totals.rows[0]?.discounts);
+        const fines = safeNum(totals.rows[0]?.fines);
+        if (Number(amount) < paid) {
+          await client.query('rollback');
+          return json(res, 400, { error: `New fee amount (₹${amount}) cannot be less than the already collected amount (₹${paid}).` });
+        }
+        const balance = Math.max(0, Number(amount) - paid - discounts - fines);
+        const status = balance <= 0 ? 'paid' : (paid > 0 ? 'partial' : (dueDate && dueDate < new Date().toISOString().slice(0, 10) ? 'overdue' : 'upcoming'));
+        
+        await client.query(
+          `update public.student_fees
+           set title = coalesce($2, title),
+               total_amount = $3,
+               due_date = $4,
+               structure_id = coalesce($5, structure_id),
+               subject_id = $6,
+               subject_ids = $7,
+               status = $8,
+               updated_at = now()
+           where id = $1`,
+          [feeId, title || null, amount, dueDate, structureId, primarySubjectId, subjectIds, status]
+        );
+        await client.query(
+          `update public.fees
+           set description = coalesce($2, description),
+               amount = $3,
+               due_date = $4,
+               status = case when $8::text = 'paid' then 'paid' else 'pending' end,
+               updated_at = now()
+           where id = $1`,
+          [feeId, title || null, amount, dueDate, structureId, primarySubjectId, subjectIds, status]
+        );
+        await client.query('commit');
+        invalidate();
+        return json(res, 200, { message: 'Fee updated successfully.', balance, status });
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
     if (method === 'POST' && (match=endpoint.match(/^\/api\/admin\/finance\/fees\/([^/]+)\/payments$/))) {
       const feeId=clean(decodeURIComponent(match[1]),80), amount=String(input.amount??''), methodName=clean(input.method,40).toLowerCase(), idempotency=clean(input.idempotencyKey,100), reference=clean(input.reference,160);
       if(!validAmount(amount)||!allowedMethods.has(methodName)||!idempotency)return json(res,400,{error:'Check the payment amount, method and request key.'});
@@ -373,6 +562,7 @@ const smokeQueries = {
     'select id,name,start_date,end_date,status from public.academic_years order by start_date desc nulls last limit 1',
     "select staff_key,name,employee_id,status from public.staff where lower(coalesce(status,'')) not in ('inactive','left','terminated') order by name limit 1",
     'select id,name,component_group,badge_color,active from public.fee_types where active=true order by name',
+    'select id,name,course_id,status from public.subjects order by name limit 1',
   ],
   feeTypes: ['select id,name,component_group,badge_color,active from public.fee_types where active=true order by name'],
   structures: ['select f.id,f.title,f.fee_type_id,f.component_group,f.total_amount,f.frequency,f.academic_year_id,f.scope,f.mandatory_enrollment,f.due_date,f.notes,f.active from public.fee_structures f where ($1=\'all\' or f.scope=$1) order by f.created_at desc limit 1'],

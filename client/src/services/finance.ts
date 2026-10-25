@@ -1,7 +1,15 @@
 import { apiRequest } from './api';
 
 export type FinanceItem = Record<string, unknown> & { id?: string; reversed_at?: string | null };
-export type FinanceLookups = { students: FinanceItem[]; batches: FinanceItem[]; courses: FinanceItem[]; academicYears: FinanceItem[]; staff: FinanceItem[]; feeTypes: FinanceItem[] };
+export type FinanceLookups = {
+  students: FinanceItem[];
+  batches: FinanceItem[];
+  courses: FinanceItem[];
+  subjects: FinanceItem[];
+  academicYears: FinanceItem[];
+  staff: FinanceItem[];
+  feeTypes: FinanceItem[];
+};
 const cache = new Map<string, { expires: number; value: unknown }>();
 const CACHE_MS = 12000;
 const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -21,6 +29,11 @@ export async function financeGet<T>(path: string, fresh = false): Promise<T> {
 }
 export async function financePost<T>(path: string, body: unknown): Promise<T> {
   const value = await apiRequest<T>(`/api/admin/finance${path}`, { method: 'POST', headers: await csrfHeaders(), body });
+  invalidateFinanceCache();
+  return value;
+}
+export async function financePut<T>(path: string, body: unknown): Promise<T> {
+  const value = await apiRequest<T>(`/api/admin/finance${path}`, { method: 'PUT', headers: await csrfHeaders(), body });
   invalidateFinanceCache();
   return value;
 }
