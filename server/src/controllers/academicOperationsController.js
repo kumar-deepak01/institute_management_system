@@ -70,132 +70,182 @@ async function attendance(req,res,url,auth){
     try{
       const pool=getPool();
 
-      // 1. Available Dates with classes
+      function cleanSubjectLabel(name) {
+        return String(name || '').replace(/\s*\(.*?\)/g, '').trim().toUpperCase() || 'SUBJECT';
+      }
+
+      // 1. Batches Lookup
+      const batchesRes=await queryWithLimit(()=>pool.query(`select id, name, course_id, record_json from public.batches order by name`));
+      const availableBatches=batchesRes.rows||[];
+      const selectedBatch=availableBatches.find(b => b.id === batchId);
+
+      // 2. Query subjects assigned to this batch (via course_id and/or record_json)
+      let assignedSubjects = [];
+      if (batchId && selectedBatch) {
+        const explicitIds = Array.isArray(selectedBatch.record_json?.subjects) ? selectedBatch.record_json.subjects :
+                            Array.isArray(selectedBatch.record_json?.subjectIds) ? selectedBatch.record_json.subjectIds : [];
+
+        const assignedSubsRes = await queryWithLimit(()=>pool.query(
+          `with unique_subs as (
+             select distinct s.id, s.name, s.course_id
+             from public.subjects s
+             where lower(coalesce(s.status,'active')) not in ('inactive','archived')
+               and (
+                 ($1 != '' and s.course_id = $1)
+                 or ($2::text[] is not null and array_length($2::text[], 1) > 0 and s.id = any($2::text[]))
+               )
+           )
+           select id, name, course_id
+           from unique_subs
+           order by case
+             when lower(name) like '%physic%' then 1
+             when lower(name) like '%chemist%' then 2
+             when lower(name) like '%math%' then 3
+             when lower(name) like '%bio%' then 4
+             else 5 end, name`,
+          [selectedBatch.course_id || '', explicitIds.length ? explicitIds : null]
+        ));
+        assignedSubjects = assignedSubsRes.rows || [];
+      } else {
+        // All Batches: subjects assigned across all active batches/courses
+        const allAssignedRes = await queryWithLimit(()=>pool.query(
+          `with unique_subs as (
+             select distinct s.id, s.name, s.course_id
+             from public.subjects s
+             join public.batches b on b.course_id = s.course_id or (b.record_json->'subjects' @> to_jsonb(s.id) or b.record_json->'subjectIds' @> to_jsonb(s.id))
+             where lower(coalesce(s.status,'active')) not in ('inactive','archived')
+               and coalesce(b.active, true) = true
+           )
+           select id, name, course_id
+           from unique_subs
+           order by case
+             when lower(name) like '%physic%' then 1
+             when lower(name) like '%chemist%' then 2
+             when lower(name) like '%math%' then 3
+             when lower(name) like '%bio%' then 4
+             else 5 end, name`
+        ));
+        assignedSubjects = allAssignedRes.rows || [];
+      }
+
+      // Dynamic column headers (clean uppercase display names, deduplicated per batch view)
+      const assignedCleanNames = Array.from(new Set(assignedSubjects.map(s => cleanSubjectLabel(s.name))));
+
+      // 3. Available dates with scheduled classes for this batch
       const datesRes=await queryWithLimit(()=>pool.query(
         `select distinct
            to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD') as date_str,
            to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'Dy, DD Mon YYYY') as label,
            to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'FMDay, FMDD FMMonth YYYY') as full_label
          from public.live_classes lc
-         where ($1='' or lc.batch_id=$1 or lc.batch_id is null)
+         where ($1 = '' or lc.batch_id = $1 or lc.batch_id is null)
          order by date_str desc`,[batchId]
       ));
       const availableDates=(datesRes.rows||[]);
-      const activeDateStr=dateParam || availableDates[0]?.date_str || new Date().toISOString().slice(0,10);
-      const activeDateObj=availableDates.find(d=>d.date_str===activeDateStr) || {
+
+      // Pick active date: if requested date is valid for this batch use it, else pick the latest date that has classes
+      const activeDateStr = (dateParam && availableDates.some(d => d.date_str === dateParam))
+        ? dateParam
+        : (availableDates[0]?.date_str || new Date().toISOString().slice(0, 10));
+
+      const activeDateObj = availableDates.find(d => d.date_str === activeDateStr) || {
         date_str: activeDateStr,
         label: activeDateStr,
         full_label: activeDateStr
       };
 
-      // 2. Batches
-      const batchesRes=await queryWithLimit(()=>pool.query(`select id, name from public.batches order by name`));
-      const availableBatches=batchesRes.rows||[];
-
-      // 3. Students
+      // 4. Students belonging to this batch
       const studentsRes=await queryWithLimit(()=>pool.query(
         `select s.id, s.student_id, s.name, s.batch_id, b.name as batch_name, s.record_json->'subjects' as subjects
          from public.students s
-         left join public.batches b on b.id=s.batch_id
-         where ($1='' or s.batch_id=$1)
+         left join public.batches b on b.id = s.batch_id
+         where ($1 = '' or s.batch_id = $1)
          order by b.name, s.name`,[batchId]
       ));
       const students=studentsRes.rows||[];
 
-      // 4. Classes on active date
+      // 5. Classes on active date for this batch
       const classesRes=await queryWithLimit(()=>pool.query(
         `select lc.id, lc.title, lc.batch_id, lc.subject_id, sub.name as subject_name, lc.scheduled_at,
                 st.name as teacher_name,
                 to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'FMHH12:MI AM') as class_time_str
          from public.live_classes lc
-         left join public.subjects sub on sub.id=lc.subject_id
-         left join public.staff st on st.id=lc.teacher_key or st.staff_key::text=lc.teacher_key
-         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=$1
-           and ($2='' or lc.batch_id=$2 or lc.batch_id is null)
+         left join public.subjects sub on sub.id = lc.subject_id
+         left join public.staff st on st.id = lc.teacher_key or st.staff_key::text = lc.teacher_key
+         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD') = $1
+           and ($2 = '' or lc.batch_id = $2 or lc.batch_id is null)
          order by lc.scheduled_at`,[activeDateStr, batchId]
       ));
       const todayClasses=classesRes.rows||[];
 
-      // 5. Joins on active date
+      // 6. Joins on active date
       const joinsRes=await queryWithLimit(()=>pool.query(
         `select j.id, j.student_key, j.class_id, j.subject_id, j.status, j.joined_at,
                 to_char(j.joined_at at time zone 'Asia/Kolkata', 'FMHH12:MI AM') as join_time_str
          from public.live_class_joins j
-         where to_char(coalesce(j.joined_at, j.attendance_date) at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=$1`,
+         where to_char(coalesce(j.joined_at, j.attendance_date) at time zone 'Asia/Kolkata', 'YYYY-MM-DD') = $1`,
         [activeDateStr]
       ));
       const todayJoins=joinsRes.rows||[];
 
-      // 6. Subjects for table columns
-      const subjectsRes=await queryWithLimit(()=>pool.query(
-        `select id, name from public.subjects
-         where lower(coalesce(status,'active')) not in ('inactive','archived')
-         order by case
-           when lower(name) like '%physics%' then 1
-           when lower(name) like '%chemistry%' then 2
-           when lower(name) like '%math%' then 3
-           when lower(name) like '%bio%' then 4
-           else 5 end, name`
-      ));
-      const allSubjects=subjectsRes.rows||[];
+      // All subjects lookup to match student enrollment names if IDs vary across streams
+      const allSubjectsRes = await queryWithLimit(()=>pool.query(`select id, name from public.subjects`));
+      const allSubjectsMap = new Map((allSubjectsRes.rows||[]).map(s => [s.id, cleanSubjectLabel(s.name)]));
 
-      const isBetaBatch = batchId && availableBatches.find(b => b.id === batchId)?.name?.toLowerCase().includes('beta');
-      const subjectColumns = batchId ? (
-        isBetaBatch
-          ? ['PHYSICS', 'CHEMISTRY', 'BIOLOGY']
-          : ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS']
-      ) : ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS', 'BIOLOGY'];
-
-      // 7. Real KPIs from DB
+      // 7. Real KPIs from DB for this batch and its assigned subjects
       const totalClassesRes=await queryWithLimit(()=>pool.query(
-        `select count(*)::int as c from public.live_classes lc where ($1='' or lc.batch_id=$1 or lc.batch_id is null)`,
+        `select count(*)::int as c from public.live_classes lc where ($1 = '' or lc.batch_id = $1 or lc.batch_id is null)`,
         [batchId]
       ));
       const totalJoinsRes=await queryWithLimit(()=>pool.query(
-        `select count(*)::int as c from public.live_class_joins j where lower(coalesce(j.status,''))='present' and ($1='' or j.batch_id=$1)`,
+        `select count(*)::int as c from public.live_class_joins j where lower(coalesce(j.status,'')) = 'present' and ($1 = '' or j.batch_id = $1)`,
         [batchId]
       ));
       const todayClassesCountRes=await queryWithLimit(()=>pool.query(
         `select count(*)::int as c from public.live_classes lc
-         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=to_char(now() at time zone 'Asia/Kolkata', 'YYYY-MM-DD')
-           and ($1='' or lc.batch_id=$1 or lc.batch_id is null)`,
+         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD') = to_char(now() at time zone 'Asia/Kolkata', 'YYYY-MM-DD')
+           and ($1 = '' or lc.batch_id = $1 or lc.batch_id is null)`,
         [batchId]
       ));
 
       const totalClasses=Number(totalClassesRes.rows[0]?.c||0);
       const autoMarkedJoins=Number(totalJoinsRes.rows[0]?.c||0);
       const liveClassesToday=Number(todayClassesCountRes.rows[0]?.c||0);
+
+      // Attendance % = attended / (classes held * enrolled students)
       const totalPossible=totalClasses * (students.length || 1);
       const avgAttendanceRate=totalPossible > 0 ? Math.round((autoMarkedJoins / totalPossible) * 100) : 0;
 
-      // 8. Day Register Rows
+      // 8. Day Register Rows (only for assigned subjects of this batch)
       const dayRegisterRows=students.map(st=>{
-        const enrolledSubjects=Array.isArray(st.subjects)?st.subjects:[];
+        const enrolledIds=Array.isArray(st.subjects)?st.subjects:[];
+        const enrolledNames=new Set(enrolledIds.map(id => allSubjectsMap.get(id)).filter(Boolean));
         const rowSubjects={};
 
-        for(const col of subjectColumns){
-          const matchedSub=allSubjects.find(s=>s.name.toUpperCase().includes(col));
-          const isEnrolled=matchedSub ? enrolledSubjects.includes(matchedSub.id) : true;
-          if(!isEnrolled){
-            rowSubjects[col]={ status:'Not enrolled' };
+        for(const colName of assignedCleanNames){
+          const matchingAssigned = assignedSubjects.filter(s => cleanSubjectLabel(s.name) === colName);
+          const hasTakenSubject = matchingAssigned.some(s => enrolledIds.includes(s.id)) || enrolledNames.has(colName);
+
+          if(!hasTakenSubject){
+            rowSubjects[colName]={ status:'Not enrolled' };
             continue;
           }
 
-          const cls=todayClasses.find(c=>
-            (matchedSub && c.subject_id===matchedSub.id) ||
-            (c.subject_name && c.subject_name.toUpperCase().includes(col))
+          const cls=todayClasses.find(c =>
+            matchingAssigned.some(s => s.id === c.subject_id) ||
+            cleanSubjectLabel(c.subject_name) === colName
           );
 
           if(!cls){
-            rowSubjects[col]={ status:'No class this day' };
+            rowSubjects[colName]={ status:'No class this day' };
             continue;
           }
 
           const join=todayJoins.find(j=>j.student_key===st.id && j.class_id===cls.id && String(j.status).toLowerCase()==='present');
           if(join){
-            rowSubjects[col]={ status:'Present', joinTime:`Joined ${join.join_time_str || 'class'}` };
+            rowSubjects[colName]={ status:'Present', joinTime:`Joined ${join.join_time_str || 'class'}` };
           } else {
-            rowSubjects[col]={ status:'Absent', classTime:`Class at ${cls.class_time_str || 'scheduled time'}` };
+            rowSubjects[colName]={ status:'Absent', classTime:`Class at ${cls.class_time_str || 'scheduled time'}` };
           }
         }
 
@@ -262,11 +312,11 @@ async function attendance(req,res,url,auth){
         dayRegister: {
           date: activeDateObj.full_label || activeDateStr,
           dateStr: activeDateStr,
-          subjects: subjectColumns,
+          subjects: assignedCleanNames,
           rows: dayRegisterRows
         },
         availableDates,
-        availableBatches,
+        availableBatches: availableBatches.map(b => ({ id: b.id, name: b.name })),
         liveClassFeed,
         batchAnalytics
       });

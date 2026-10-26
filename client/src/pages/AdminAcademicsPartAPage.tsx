@@ -33,11 +33,11 @@ function AttendancePage() {
     try {
       const res = await getLiveAttendanceSummary(batch, date);
       setSummaryData(res);
-      if (!date && res?.dayRegister?.dateStr) {
-        setDate(res.dayRegister.dateStr);
+      const activeStr = res?.dayRegister?.dateStr || res?.availableDates?.[0]?.date_str || '';
+      if (!date || (res?.availableDates?.length && !res.availableDates.some((d: any) => d.date_str === date))) {
+        if (activeStr) setDate(activeStr);
       }
     } catch {
-      // Friendly fallback if network drops
       setSummaryData(null);
     } finally {
       setLoading(false);
@@ -57,24 +57,13 @@ function AttendancePage() {
 
   const dayRegister = summaryData?.dayRegister || {
     date: 'No classes scheduled',
-    dateStr: date || '2026-10-25',
-    subjects: ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS'],
+    dateStr: date || '',
+    subjects: [],
     rows: []
   };
 
-  const availableDates: Array<{ date_str: string; label: string; full_label: string }> = summaryData?.availableDates || [
-    { date_str: '2026-10-25', label: 'Sun, 25 Oct 2026', full_label: 'Sunday, 25 October 2026' },
-    { date_str: '2026-10-24', label: 'Sat, 24 Oct 2026', full_label: 'Saturday, 24 October 2026' },
-    { date_str: '2026-10-23', label: 'Fri, 23 Oct 2026', full_label: 'Friday, 23 October 2026' },
-    { date_str: '2026-10-22', label: 'Thu, 22 Oct 2026', full_label: 'Thursday, 22 October 2026' },
-    { date_str: '2026-10-21', label: 'Wed, 21 Oct 2026', full_label: 'Wednesday, 21 October 2026' },
-  ];
-
-  const availableBatches: Array<{ id: string; name: string }> = summaryData?.availableBatches || [
-    { id: 'e99885bc-17f1-4a0a-bf77-e7fb1cee36df', name: 'ALPHA' },
-    { id: '03ac497f-f981-4926-bec9-f5680823631a', name: 'BETA' },
-  ];
-
+  const availableDates: Array<{ date_str: string; label: string; full_label: string }> = summaryData?.availableDates || [];
+  const availableBatches: Array<{ id: string; name: string }> = summaryData?.availableBatches || [];
   const liveClassFeed = summaryData?.liveClassFeed || [];
   const batchAnalytics = summaryData?.batchAnalytics || [];
 
@@ -101,7 +90,9 @@ function AttendancePage() {
           <select
             value={batch}
             onChange={(e) => {
-              setBatch(e.target.value);
+              const nextBatch = e.target.value;
+              setBatch(nextBatch);
+              setDate(''); // Reset date so API automatically picks latest available date for this batch!
             }}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm outline-none transition hover:border-orange-500 focus:border-orange-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
           >
@@ -199,17 +190,19 @@ function AttendancePage() {
             <h2 className="text-base font-extrabold text-orange-950 dark:text-orange-300">
               Day Register: {dayRegister.date}
             </h2>
-            <select
-              value={date || dayRegister.dateStr || ''}
-              onChange={(e) => setDate(e.target.value)}
-              className="rounded-xl border border-orange-200 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm outline-none transition hover:border-orange-500 focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-            >
-              {availableDates.map((d) => (
-                <option key={d.date_str} value={d.date_str}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
+            {availableDates.length > 0 && (
+              <select
+                value={date || dayRegister.dateStr || availableDates[0]?.date_str || ''}
+                onChange={(e) => setDate(e.target.value)}
+                className="rounded-xl border border-orange-200 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm outline-none transition hover:border-orange-500 focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {availableDates.map((d) => (
+                  <option key={d.date_str} value={d.date_str}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Table Container */}
@@ -226,7 +219,16 @@ function AttendancePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {dayRegister.rows.length === 0 ? (
+                {dayRegister.subjects.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={2}
+                      className="p-12 text-center text-sm font-semibold text-slate-500 dark:text-slate-400"
+                    >
+                      {loading ? 'Loading attendance data…' : 'No subjects assigned to this batch yet.'}
+                    </td>
+                  </tr>
+                ) : dayRegister.rows.length === 0 ? (
                   <tr>
                     <td
                       colSpan={dayRegister.subjects.length + 1}
