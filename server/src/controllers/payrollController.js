@@ -104,6 +104,7 @@ async function markPayrollReview(client, staffId, effectiveDate, reason) {
 
 const payrollStaffSql = `select s.id,s.staff_key,s.employee_id,s.name,s.email,s.role,s.staff_type,s.status,s.employment_type,
   s.monthly_salary,s.base_salary,s.per_class_rate,s.hourly_rate,s.pf_percent,s.tds_percent,
+  coalesce(sp.account_holder_name,'') account_holder_name,coalesce(sp.bank_name,'') bank_name,coalesce(sp.bank_account_number,'') bank_account_number,coalesce(sp.ifsc_code,'') ifsc_code,coalesce(sp.branch,'') branch,coalesce(sp.upi_id,'') upi_id,coalesce(sp.payment_mode,'both') payment_mode,
   coalesce(ch.compensation_model,case when lower(coalesce(s.employment_type,'')) like '%hourly%' then 'hourly' when lower(coalesce(s.employment_type,'')) like '%contract%' then 'per_class' when lower(coalesce(s.employment_type,'')) like '%hybrid%' or lower(coalesce(s.employment_type,'')) like '%part-time%' then 'hybrid' else 'monthly' end) compensation_model,
   coalesce(ch.monthly_rate,s.monthly_salary,s.base_salary,0)::numeric monthly_rate,
   coalesce(ch.hourly_rate,s.hourly_rate,0)::numeric effective_hourly_rate,
@@ -114,6 +115,7 @@ const payrollStaffSql = `select s.id,s.staff_key,s.employee_id,s.name,s.email,s.
   coalesce(w.approved_minutes,0)::int approved_minutes,coalesce(w.approved_classes,0)::int approved_classes,
   coalesce(w.pending_records,0)::int pending_records,coalesce(lv.paid_leave_days,0)::int paid_leave_days,coalesce(lv.unpaid_leave_days,0)::int unpaid_leave_days
 from public.staff s
+left join public.staff_private sp on sp.staff_id=s.id
 left join lateral (select h.* from public.staff_compensation_history h where h.staff_id=s.id and h.effective_from<=$2::date and (h.effective_to is null or h.effective_to>=$1::date) order by h.effective_from desc limit 1) ch on true
 left join lateral (select (count(*) filter(where record_kind='attendance' and status='approved' and lower(coalesce(record_json->>'attendanceStatus','')) in ('present','late')) + count(*) filter(where record_kind='attendance' and status='approved' and lower(coalesce(record_json->>'attendanceStatus',''))='half_day') * 0.5)::numeric present_days,
   (count(*) filter(where record_kind='attendance' and status='approved' and lower(coalesce(record_json->>'attendanceStatus',''))='absent') + count(*) filter(where record_kind='attendance' and status='approved' and lower(coalesce(record_json->>'attendanceStatus',''))='half_day') * 0.5)::numeric absent_days,
@@ -125,7 +127,7 @@ left join lateral (
   select (count(distinct day_row.day) filter(where day_row.paid='true'))::int paid_leave_days,
     (count(distinct day_row.day) filter(where day_row.paid='false'))::int unpaid_leave_days
   from (
-    select days.day::date day,lt.record_json->>'paid' paid
+    select days.day::date as day,lt.record_json->>'paid' as paid
     from public.app_records request
     join public.app_records lt on lt.source_tab='Leave Types' and lt.record_id=request.record_json->>'typeId'
     cross join lateral generate_series(
@@ -183,11 +185,22 @@ function staffView(row, period, workdays) {
     approvedMinutes: row.approved_minutes, approvedClasses: row.approved_classes,
   });
   const dayCount = Number(row.present_days || 0) + Number(row.absent_days || 0);
+  const hasPaymentDetails = Boolean(row.bank_account_number || row.upi_id);
+  const paymentDetails = {
+    paymentMode: row.payment_mode || 'both',
+    accountHolderName: row.account_holder_name || '',
+    bankName: row.bank_name || '',
+    bankAccountNumber: row.bank_account_number || '',
+    ifscCode: row.ifsc_code || '',
+    branch: row.branch || '',
+    upiId: row.upi_id || ''
+  };
   return { id: row.id, staffKey: row.staff_key, employeeId: row.employee_id || '', name: row.name || '', email: row.email || '', role: row.role || row.staff_type || 'Staff', employmentType: row.employment_type || '', model: row.compensation_model, profileSet,
     monthlyRate: Number(row.monthly_rate || 0), hourlyRate: Number(row.effective_hourly_rate || 0), classRate: Number(row.class_rate || 0), teachingHourRate: Number(row.teaching_hour_rate || 0), allowance: Number(row.allowance || 0),
     presentDays: Number(row.present_days || 0), absentDays: Number(row.absent_days || 0), paidLeaveDays: Number(row.paid_leave_days || 0), unpaidLeaveDays: Number(row.unpaid_leave_days || 0), recordedAttendanceDays: dayCount,
     attendancePercent: dayCount ? Math.round(Number(row.present_days || 0) * 100 / dayCount) : null,
-    approvedMinutes: Number(row.approved_minutes || 0), payableHours: Number(row.approved_minutes || 0) / 60, approvedClasses: Number(row.approved_classes || 0), pendingWorkRecords: Number(row.pending_records || 0), ...preview, period: period.key };
+    approvedMinutes: Number(row.approved_minutes || 0), payableHours: Number(row.approved_minutes || 0) / 60, approvedClasses: Number(row.approved_classes || 0), pendingWorkRecords: Number(row.pending_records || 0),
+    hasPaymentDetails, paymentDetails, ...preview, period: period.key };
 }
 async function adjustmentsByStaff(period, executor = getPool()) {
   const { rows } = await executor.query(`select staff_id,kind,label,amount,reason,id from public.payroll_adjustments where period_start=$1::date and period_end=$2::date and status='approved' and payroll_id is null order by staff_id,created_at,id`, [period.start, period.end]);
@@ -491,9 +504,10 @@ async function handlePayrollRoute(req, res, url) {
       const selected = data.period && dateOk(`${data.period}-01`) ? periodFrom(new URL(`http://local/?month=${Number(data.period.slice(5,7))}&year=${Number(data.period.slice(0,4))}`)) : period;
       const [staffRows, extras, advances] = await Promise.all([queryWithLimit(() => loadStaff(selected)), queryWithLimit(() => adjustmentsByStaff(selected)), queryWithLimit(() => advancesByStaff())]);
       const workdays = await workingDays(selected);
-      const records = staffRows.rows.map(row => {
+      const rowsList = Array.isArray(staffRows) ? staffRows : (staffRows?.rows || []);
+      const records = rowsList.map(row => {
         const item = staffView(row, selected, workdays); const extended = addExtras({ ...row, _workingDays: workdays }, extras.get(row.id), advances.get(row.id) || []);
-        return { ...item, ...extended, eligible: item.profileSet && item.pendingWorkRecords === 0, warnings: [...(!item.profileSet ? ['Compensation profile is not configured.'] : []), ...(item.pendingWorkRecords ? [`${item.pendingWorkRecords} work or attendance records need review.`] : [])] };
+        return { ...item, ...extended, eligible: item.profileSet && item.pendingWorkRecords === 0, warnings: [...(!item.profileSet ? ['Compensation profile is not configured.'] : []), ...(item.pendingWorkRecords ? [`${item.pendingWorkRecords} work or attendance records need review.`] : []), ...(!item.hasPaymentDetails ? ['Payment details (Bank Account or UPI) are missing.'] : [])] };
       });
       return send(res, 200, { period: selected, workingDays: workdays, records, totals: { staff: records.filter(row => row.eligible).length, gross: records.reduce((n, row) => n + row.grossPay, 0), deductions: records.reduce((n, row) => n + row.totalDeductions, 0), net: records.reduce((n, row) => n + row.netPay, 0) } });
     }
@@ -508,42 +522,48 @@ async function handlePayrollRoute(req, res, url) {
         await client.query('select pg_advisory_xact_lock(hashtext($1))', [selected.key]);
         const existing = await client.query('select id,status from public.payroll_runs where period_start=$1::date and period_end=$2::date for update', [selected.start, selected.end]);
         const existingRun = existing.rows[0] || null;
-        if (existingRun && !(data.recalculate === true && existingRun.status === 'draft')) { await client.query('rollback'); return send(res, 409, { error: `Payroll already exists for this period (${existingRun.status}). Only a draft can be recalculated.`, runId: existingRun.id }); }
+        if (existingRun && existingRun.status === 'settled' && !data.confirmSettledOverwrite) {
+          await client.query('rollback');
+          return send(res, 409, { error: `Payroll for ${selected.key} has already been marked as Settled. Confirm to recalculate and overwrite.`, settled: true, runId: existingRun.id });
+        }
         const requestedStaffId = clean(data.staffId, 120);
-        if (existingRun && requestedStaffId) { await client.query('rollback'); return send(res, 409, { error: 'An existing draft must be recalculated for the full period. Review it and select All Staff.' , runId: existingRun.id }); }
         const [staffRows, extras, advances] = await Promise.all([loadStaff(selected, client), adjustmentsByStaff(selected, client), advancesByStaff(client)]);
         const workdays = await workingDays(selected);
         const runId = existingRun?.id || id();
-        const eligibleRows = staffRows.filter(row => staffView(row, selected, workdays).profileSet && Number(row.pending_work_records || 0) === 0);
-        if (requestedStaffId && !staffRows.some(row => row.id === requestedStaffId)) { await client.query('rollback'); return send(res, 404, { error: 'The selected staff member was not found.' }); }
-        if (requestedStaffId && !eligibleRows.some(row => row.id === requestedStaffId)) {
-          const target = staffRows.find(row => row.id === requestedStaffId);
-          const view = staffView(target, selected, workdays);
-          const reason = !view.profileSet ? 'Compensation profile is not configured.' : 'Work or attendance records need review before payroll can be generated.';
-          await client.query('rollback'); return send(res, 409, { error: `${target.name || 'This staff member'} cannot be included: ${reason}` });
+        const eligibleRows = staffRows.filter(row => staffView(row, selected, workdays).profileSet && Number(row.pending_records || 0) === 0);
+
+        let requestedIds = [];
+        if (Array.isArray(data.staffIds) && data.staffIds.length) {
+          requestedIds = data.staffIds.map(String).map(s => clean(s, 120)).filter(Boolean);
+        } else if (Array.isArray(data.includeStaffIds) && data.includeStaffIds.length) {
+          requestedIds = data.includeStaffIds.map(String).map(s => clean(s, 120)).filter(Boolean);
+        } else if (requestedStaffId) {
+          requestedIds = [requestedStaffId];
+        } else {
+          requestedIds = eligibleRows.map(row => row.id);
         }
-        const requestedIds = requestedStaffId ? [requestedStaffId]
-          : Array.isArray(data.includeStaffIds) && data.includeStaffIds.length ? data.includeStaffIds.map(String)
-            : eligibleRows.map(row => row.id);
-        if (existingRun && requestedIds.length !== eligibleRows.length) { await client.query('rollback'); return send(res, 409, { error: 'An existing draft must be recalculated for all eligible staff together.', runId: existingRun.id }); }
-        if (requestedIds.some(staffId => !eligibleRows.some(row => row.id === staffId))) { await client.query('rollback'); return send(res, 400, { error: 'One or more selected staff members are not eligible for payroll.' }); }
-        if (!requestedIds.length) { await client.query('rollback'); return send(res, 400, { error: 'No staff have a configured payroll profile with approved work records for this period.' }); }
-        const includeIds = new Set(requestedIds);
+
+        if (requestedIds.length > 0 && requestedIds.some(staffId => !staffRows.some(row => row.id === staffId))) {
+          await client.query('rollback');
+          return send(res, 404, { error: 'One or more selected staff members could not be found.' });
+        }
+        const eligibleRequested = requestedIds.filter(staffId => eligibleRows.some(row => row.id === staffId));
+        if (!eligibleRequested.length) {
+          await client.query('rollback');
+          return send(res, 400, { error: 'No selected staff members have a configured compensation profile with approved work records for this period.' });
+        }
+        const includeIds = new Set(eligibleRequested);
         const excludedStaff = staffRows.filter(row => !includeIds.has(row.id)).map(row => {
           const view = staffView(row, selected, workdays);
-          return { staffId: row.id, name: row.name || '', reason: !view.profileSet ? 'Compensation profile is not configured.' : view.pendingWorkRecords ? 'Work or attendance records need review.' : requestedStaffId ? 'Not selected for individual payroll.' : 'Not selected for this payroll.' };
+          return { staffId: row.id, name: row.name || '', reason: !view.profileSet ? 'Compensation profile is not configured.' : view.pendingWorkRecords ? 'Work or attendance records need review.' : requestedIds.length < staffRows.length ? 'Not selected for this payroll.' : 'Not selected for this payroll.' };
         });
-        if (existingRun) {
-          await client.query(`delete from public.payroll_advance_repayments where payroll_id in (select id from public.payroll where payroll_run_id=$1)`, [runId]);
-          await client.query(`update public.payroll_adjustments set payroll_id=null where payroll_id in (select id from public.payroll where payroll_run_id=$1)`, [runId]);
-          await client.query(`delete from public.payroll where payroll_run_id=$1`, [runId]);
-          await client.query(`update public.payroll_runs set review_required=false,review_reason='',record_json=$2::jsonb,gross_total=0,deduction_total=0,net_total=0,generated_by=$3,updated_at=now() where id=$1`, [runId, JSON.stringify({ warningsAccepted: Boolean(data.confirmWarnings), excludedStaff, recalculatedAt: new Date().toISOString() }), auth.account.id]);
-        } else {
+
+        if (!existingRun) {
           await client.query(`insert into public.payroll_runs(id,period_start,period_end,status,generated_by,record_json) values($1,$2::date,$3::date,'draft',$4,$5::jsonb)`, [runId, selected.start, selected.end, auth.account.id, JSON.stringify({ warningsAccepted: Boolean(data.confirmWarnings), excludedStaff })]);
         }
-        let grossCents = 0, deductionCents = 0, netCents = 0, saved = 0;
+
+        let saved = 0;
         for (const row of staffRows) {
-          const item = staffView(row, selected, workdays);
           if (!includeIds.has(row.id)) continue;
           const rowsExtras = extras.get(row.id) || { earnings: [], deductions: [] };
           const staffAdvances = advances.get(row.id) || [];
@@ -551,18 +571,29 @@ async function handlePayrollRoute(req, res, url) {
           const recovery = recoveryParts.reduce((n, x) => n + x.amount, 0);
           const calc = calculatePayroll({ model: row.compensation_model, monthlyRate: row.monthly_rate, hourlyRate: row.effective_hourly_rate, pfPercent: row.pf_percent, tdsPercent: row.tds_percent, teachingHourRate: row.teaching_hour_rate, classRate: row.class_rate, allowance: row.allowance, workingDays: workdays, unpaidAbsenceDays: Number(row.absent_days || 0) + Number(row.unpaid_leave_days || 0), attendancePolicy: row.attendance_policy, approvedMinutes: row.approved_minutes, approvedClasses: row.approved_classes, earnings: rowsExtras.earnings, deductions: rowsExtras.deductions, advanceRecovery: recovery });
           const payrollId = id();
-          const snapshot = { staffId: row.id, staffKey: row.staff_key, employeeId: row.employee_id, name: row.name, role: row.role || row.staff_type, employmentType: row.employment_type, model: row.compensation_model, monthlyRate: Number(row.monthly_rate), hourlyRate: Number(row.effective_hourly_rate), classRate: Number(row.class_rate), teachingHourRate: Number(row.teaching_hour_rate), allowance: Number(row.allowance), pfPercent: Number(row.pf_percent || 0), tdsPercent: Number(row.tds_percent || 0), attendancePolicy: row.attendance_policy, presentDays: Number(row.present_days), absentDays: Number(row.absent_days), paidLeaveDays: Number(row.paid_leave_days || 0), unpaidLeaveDays: Number(row.unpaid_leave_days || 0), approvedMinutes: Number(row.approved_minutes), approvedClasses: Number(row.approved_classes), adjustments: rowsExtras, advances: recoveryParts, calculation: calc };
+          const snapshot = { staffId: row.id, staffKey: row.staff_key, employeeId: row.employee_id, name: row.name, role: row.role || row.staff_type, employmentType: row.employment_type, model: row.compensation_model, monthlyRate: Number(row.monthly_rate), hourlyRate: Number(row.effective_hourly_rate), classRate: Number(row.class_rate), teachingHourRate: Number(row.teaching_hour_rate), allowance: Number(row.allowance), pfPercent: Number(row.pf_percent || 0), tdsPercent: Number(row.tds_percent || 0), attendancePolicy: row.attendance_policy, presentDays: Number(row.present_days), absentDays: Number(row.absent_days), paidLeaveDays: Number(row.paid_leave_days || 0), unpaidLeaveDays: Number(row.unpaid_leave_days || 0), approvedMinutes: Number(row.approved_minutes), approvedClasses: Number(row.approved_classes), adjustments: rowsExtras, advances: recoveryParts, paymentDetails: { paymentMode: row.payment_mode || 'both', accountHolderName: row.account_holder_name || '', bankName: row.bank_name || '', bankAccountNumber: row.bank_account_number || '', ifscCode: row.ifsc_code || '', branch: row.branch || '', upiId: row.upi_id || '' }, calculation: calc };
+
+          // Replace/update this specific staff row in payroll without wiping out others
+          const prevRows = await client.query('select id from public.payroll where payroll_run_id=$1 and employee_key=$2', [runId, row.id]);
+          for (const prev of prevRows.rows) {
+            await client.query('delete from public.payroll_advance_repayments where payroll_id=$1', [prev.id]);
+            await client.query('update public.payroll_adjustments set payroll_id=null where payroll_id=$1', [prev.id]);
+            await client.query('delete from public.payroll where id=$1', [prev.id]);
+          }
+
           await client.query(`insert into public.payroll(id,employee_id,amount,paid_at,status,record_json,payroll_run_id,employee_key,period_start,period_end,gross_pay,deductions,net_pay,attendance_days,payable_hours,breakdown_json,snapshot_json)
             values($1,$2,$3,null,'draft',$4::jsonb,$5,$6,$7::date,$8::date,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb)`, [payrollId, row.employee_id || row.id, calc.netPay, JSON.stringify({ staffKey: row.staff_key, period: selected.key, status: 'draft' }), runId, row.id, selected.start, selected.end, calc.grossPay, calc.totalDeductions, calc.netPay, row.present_days, calc.payableHours, JSON.stringify(calc), JSON.stringify(snapshot)]);
           for (const recoveryItem of recoveryParts) await client.query(`insert into public.payroll_advance_repayments(id,advance_id,payroll_id,period_start,amount,created_by) values($1,$2,$3,$4::date,$5,$6)`, [id(), recoveryItem.advanceId, payrollId, selected.start, recoveryItem.amount, auth.account.id]);
           for (const adjustment of [...rowsExtras.earnings, ...rowsExtras.deductions]) await client.query('update public.payroll_adjustments set payroll_id=$2 where id=$1 and payroll_id is null', [adjustment.id, payrollId]);
-          grossCents += Math.round(calc.grossPay * 100); deductionCents += Math.round(calc.totalDeductions * 100); netCents += Math.round(calc.netPay * 100); saved += 1;
+          saved += 1;
         }
-        const grossTotal = grossCents / 100, deductionTotal = deductionCents / 100, netTotal = netCents / 100;
-        await client.query('update public.payroll_runs set gross_total=$2,deduction_total=$3,net_total=$4,updated_at=now() where id=$1', [runId, grossTotal, deductionTotal, netTotal]);
-        await audit(client, auth.account, existingRun ? 'payroll.recalculated' : 'payroll.generated', { period: selected.key, recalculated: Boolean(existingRun), staffCount: saved, grossTotal, deductionTotal, netTotal }, null, runId);
+
+        const totalsRes = await client.query('select count(*)::int staff_count, coalesce(sum(gross_pay),0)::numeric gross_total, coalesce(sum(deductions),0)::numeric deduction_total, coalesce(sum(net_pay),0)::numeric net_total from public.payroll where payroll_run_id=$1', [runId]);
+        const totals = totalsRes.rows[0];
+        await client.query('update public.payroll_runs set gross_total=$2,deduction_total=$3,net_total=$4,review_required=false,review_reason=\'\',updated_at=now() where id=$1', [runId, totals.gross_total, totals.deduction_total, totals.net_total]);
+        await audit(client, auth.account, existingRun ? 'payroll.recalculated' : 'payroll.generated', { period: selected.key, recalculated: Boolean(existingRun), staffCount: Number(totals.staff_count), grossTotal: Number(totals.gross_total), deductionTotal: Number(totals.deduction_total), netTotal: Number(totals.net_total) }, null, runId);
         await client.query('commit'); invalidate();
-        return send(res, 201, { run: { id: runId, period: selected.key, status: 'draft', staffCount: saved, grossTotal, deductionTotal, netTotal }, generated: saved, skipped: excludedStaff });
+        return send(res, 201, { run: { id: runId, period: selected.key, status: existingRun?.status || 'draft', staffCount: Number(totals.staff_count), grossTotal: Number(totals.gross_total), deductionTotal: Number(totals.deduction_total), netTotal: Number(totals.net_total) }, generated: saved, skipped: excludedStaff });
       } catch (error) { try { await client.query('rollback'); } catch {} log(pathname, 'generate draft payroll', error); return send(res, 500, { error: 'Draft payroll could not be generated.' }); }
       finally { client.release(); }
     }
@@ -731,6 +762,63 @@ async function handlePayrollRoute(req, res, url) {
       const payrollHistory = results[0].rows.map(row => ({ id: row.id, periodStart: row.period_start ? String(row.period_start).slice(0, 10) : null, periodEnd: row.period_end ? String(row.period_end).slice(0, 10) : null, status: row.status, grossPay: Number(row.gross_pay ?? row.amount ?? 0), deductions: Number(row.deductions || 0), netPay: Number(row.net_pay ?? row.amount ?? 0), attendanceDays: Number(row.attendance_days || 0), payableHours: Number(row.payable_hours || 0), breakdown: row.breakdown_json || {}, snapshot: row.snapshot_json || {}, paymentDate: row.paid_at || row.record_json?.paidAt || null }));
       return send(res, 200, { staff: staff.rows[0], payrollHistory, workRecords: results[1].rows.map(row => ({ id: row.id, date: String(row.work_date).slice(0, 10), kind: row.record_kind, source: row.source, verificationStatus: row.verification_status, status: row.status, minutes: row.minutes, payableMinutes: row.payable_minutes, record_json: row.record_json || {}, ...row.record_json })), compensationHistory: results[2].rows.map(row => ({ id: row.id, model: row.compensation_model, monthlyRate: Number(row.monthly_rate), hourlyRate: Number(row.hourly_rate), classRate: Number(row.class_rate), teachingHourRate: Number(row.teaching_hour_rate), allowance: Number(row.allowance), effectiveFrom: String(row.effective_from).slice(0, 10), effectiveTo: row.effective_to ? String(row.effective_to).slice(0, 10) : null, attendancePolicy: row.attendance_policy, reason: row.reason })), adjustments: results[3].rows.map(row => ({ id: row.id, periodStart: String(row.period_start).slice(0,10), periodEnd: String(row.period_end).slice(0,10), kind: row.kind, label: row.label, amount: Number(row.amount), reason: row.reason, status: row.status, approvedAt: row.approved_at })) });
     }
+    if (req.method === 'POST' && pathname === '/api/admin/payroll/staff-payment-details') {
+      const data = await input(req, res, auth); if (!data) return;
+      const staffId = clean(data.staffId, 120);
+      if (!staffId) return send(res, 400, { error: 'Staff ID is required.' });
+      const paymentMode = clean(data.paymentMode, 20) || 'both';
+      const accountHolderName = clean(data.accountHolderName, 120);
+      const bankName = clean(data.bankName, 120);
+      const bankAccountNumber = clean(data.bankAccountNumber, 34).replace(/\s/g, '');
+      const ifscCode = clean(data.ifscCode, 11).toUpperCase().trim();
+      const branch = clean(data.branch, 120);
+      const upiId = clean(data.upiId, 120).trim();
+
+      if (!bankAccountNumber && !upiId) {
+        return send(res, 400, { error: 'Please provide either Bank Account or UPI details for payroll payouts.' });
+      }
+      if (bankAccountNumber) {
+        if (!/^[0-9]{6,34}$/.test(bankAccountNumber)) return send(res, 400, { error: 'Enter a valid bank account number (6 to 34 digits).' });
+        if (ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)) return send(res, 400, { error: 'Enter a valid 11-character IFSC code (e.g. HDFC0001234).' });
+      }
+      if (upiId) {
+        if (!/^[\w.\-_]{2,}@[a-zA-Z0-9.\-_]{2,}$/.test(upiId)) return send(res, 400, { error: 'Enter a valid UPI ID (e.g. name@okhdfcbank or 9876543210@paytm).' });
+      }
+
+      const client = await getPool().connect();
+      try {
+        await client.query('begin');
+        const found = await client.query('select id, name, record_json from public.staff where id=$1', [staffId]);
+        if (!found.rowCount) { await client.query('rollback'); return send(res, 404, { error: 'Staff member not found.' }); }
+        const staff = found.rows[0];
+        const holderName = accountHolderName || staff.name || '';
+        await client.query(`insert into public.staff_private(staff_id,account_holder_name,bank_name,bank_account_number,ifsc_code,branch,upi_id,payment_mode,updated_at)
+          values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),$8,now())
+          on conflict(staff_id) do update set
+            account_holder_name=excluded.account_holder_name,
+            bank_name=excluded.bank_name,
+            bank_account_number=excluded.bank_account_number,
+            ifsc_code=excluded.ifsc_code,
+            branch=excluded.branch,
+            upi_id=excluded.upi_id,
+            payment_mode=excluded.payment_mode,
+            updated_at=now()`,
+          [staffId, holderName, bankName, bankAccountNumber, ifscCode, branch, upiId, paymentMode]);
+
+        const paymentDetails = { paymentMode, accountHolderName: holderName, bankName, bankAccountNumber, ifscCode, branch, upiId };
+        const updatedRecord = { ...(staff.record_json || {}), paymentDetails };
+        await client.query('update public.staff set record_json=$2::jsonb,updated_at=now() where id=$1', [staffId, JSON.stringify(updatedRecord)]);
+        await client.query('commit');
+        invalidate();
+        return send(res, 200, { ok: true, staffId, paymentDetails, hasPaymentDetails: true });
+      } catch (err) {
+        try { await client.query('rollback'); } catch {}
+        log(pathname, 'save payment details', err);
+        return send(res, 500, { error: 'Payment details could not be saved.' });
+      } finally {
+        client.release();
+      }
+    }
     if (req.method === 'GET' && pathname === '/api/admin/payroll/zoom/status') {
       const { rows } = await queryWithLimit(() => getPool().query(`select connected,updated_at from public.integration_connections where provider='zoom' limit 1`));
       return send(res, 200, { credentialsSaved: Boolean(rows[0]?.connected), webhookSecretConfigured: Boolean(process.env.ZOOM_WEBHOOK_SECRET_TOKEN), endpoint: '/api/webhooks/zoom', participantSync: Boolean(rows[0]?.connected), message: process.env.ZOOM_WEBHOOK_SECRET_TOKEN ? 'Zoom webhook signature validation is ready.' : 'Set ZOOM_WEBHOOK_SECRET_TOKEN in the server environment to enable signed Zoom webhook events.' });

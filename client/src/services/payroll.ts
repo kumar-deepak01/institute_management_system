@@ -7,7 +7,7 @@ export type PayrollStaff = {
   presentDays: number; absentDays: number; paidLeaveDays?: number; unpaidLeaveDays?: number; recordedAttendanceDays: number; attendancePercent: number | null;
   approvedMinutes: number; payableHours: number; approvedClasses: number; pendingWorkRecords: number;
   baseEarnings: number; teachingEarnings: number; otherEarnings: number; otherDeductions: number; advanceRecovery: number;
-  grossPay: number; totalDeductions: number; netPay: number; warnings?: string[]; eligible?: boolean;
+  grossPay: number; totalDeductions: number; netPay: number; warnings?: string[]; eligible?: boolean; pfPercent?: number; pfDeduction?: number; tdsPercent?: number; tdsDeduction?: number; hasPaymentDetails?: boolean; paymentDetails?: { paymentMode?: string; accountHolderName?: string; bankName?: string; bankAccountNumber?: string; ifscCode?: string; branch?: string; upiId?: string; };
 };
 export type PayrollDashboard = {
   period: { month: number; year: number; start: string; end: string; key: string };

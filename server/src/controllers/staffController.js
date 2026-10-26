@@ -40,13 +40,20 @@ const staffSchema = z.object({
   monthlySalary: z.coerce.number().min(0).max(100000000).default(0), baseSalary: z.coerce.number().min(0).max(100000000).default(0),
   perClassRate: z.coerce.number().min(0).max(10000000).default(0), hourlyRate: z.coerce.number().min(0).max(10000000).default(0),
   pfPercent: z.coerce.number().min(0).max(100).default(12), tdsPercent: z.coerce.number().min(0).max(100).default(0),
-  bankAccountNumber: z.string().trim().max(34).default(''), bankName: z.string().trim().max(120).default(''),
-  ifscCode: z.string().trim().max(11).default(''), panNumber: z.string().trim().max(10).default(''),
+  paymentMode: z.enum(['bank','upi','both','']).default('both'),
+  accountHolderName: z.string().trim().max(120).default(''),
+  bankAccountNumber: z.string().trim().max(34).default(''),
+  confirmBankAccountNumber: z.string().trim().max(34).optional().default(''),
+  bankName: z.string().trim().max(120).default(''),
+  ifscCode: z.string().trim().max(11).default(''),
+  branch: z.string().trim().max(120).default(''),
+  upiId: z.string().trim().max(120).default(''),
+  panNumber: z.string().trim().max(10).default(''),
   assignments: z.array(assignmentSchema).max(100).default([]), temporaryPassword: z.string().max(200).optional().default(''), confirmPassword: z.string().max(200).optional().default(''),
   status: z.enum(['active','inactive']).default('active'),
 });
 
-function parseStaff(input) {
+function parseStaff(input, isFormSubmit = false) {
   const parsed = staffSchema.safeParse(input || {});
   if (!parsed.success) return { error: parsed.error.issues[0]?.message || 'Check the staff details and try again.' };
   const fields = parsed.data;
@@ -58,14 +65,40 @@ function parseStaff(input) {
   fields.specialization = clean(fields.specialization, 180);
   fields.bio = clean(fields.bio, 3000);
   fields.joiningDate = clean(fields.joiningDate, 20);
-  fields.ifscCode = fields.ifscCode.toUpperCase();
-  fields.panNumber = fields.panNumber.toUpperCase();
+  fields.accountHolderName = clean(fields.accountHolderName, 120);
+  fields.bankName = clean(fields.bankName, 120);
+  fields.branch = clean(fields.branch, 120);
+  fields.upiId = clean(fields.upiId, 120).trim();
+  fields.paymentMode = clean(fields.paymentMode, 20) || 'both';
+  fields.ifscCode = fields.ifscCode.toUpperCase().trim();
+  fields.panNumber = fields.panNumber.toUpperCase().trim();
   fields.bankAccountNumber = fields.bankAccountNumber.replace(/\s/g, '');
+  if (fields.confirmBankAccountNumber) {
+    fields.confirmBankAccountNumber = fields.confirmBankAccountNumber.replace(/\s/g, '');
+  }
   if (!emailPattern.test(fields.email)) return { error: 'Enter a valid staff email address.' };
   if (fields.joiningDate && !/^\d{4}-\d{2}-\d{2}$/.test(fields.joiningDate)) return { error: 'Enter a valid joining date.' };
-  if (fields.ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(fields.ifscCode)) return { error: 'Enter a valid IFSC code.' };
+
+  // Rule: At least ONE payment method (Bank Account OR UPI ID) is mandatory on staff add/edit
+  if (isFormSubmit && !fields.bankAccountNumber && !fields.upiId) {
+    return { error: 'Please provide either Bank Account or UPI details for payroll payouts.' };
+  }
+
+  if (fields.bankAccountNumber) {
+    if (!/^[0-9]{6,34}$/.test(fields.bankAccountNumber)) return { error: 'Enter a valid bank account number (6 to 34 digits).' };
+    if (fields.confirmBankAccountNumber && fields.bankAccountNumber !== fields.confirmBankAccountNumber) {
+      return { error: 'Bank account numbers do not match.' };
+    }
+    if (fields.ifscCode && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(fields.ifscCode)) return { error: 'Enter a valid 11-character IFSC code (e.g. HDFC0001234).' };
+    if (!fields.accountHolderName) fields.accountHolderName = fields.name;
+  }
+  if (fields.upiId) {
+    if (!/^[\w.\-_]{2,}@[a-zA-Z0-9.\-_]{2,}$/.test(fields.upiId)) {
+      return { error: 'Enter a valid UPI ID (e.g. name@okhdfcbank or 9876543210@paytm).' };
+    }
+  }
+
   if (fields.panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(fields.panNumber)) return { error: 'Enter a valid PAN number.' };
-  if (fields.bankAccountNumber && !/^[0-9]{6,34}$/.test(fields.bankAccountNumber)) return { error: 'Enter a valid bank account number.' };
   if (fields.temporaryPassword && fields.temporaryPassword.length < 10) return { error: 'Temporary password must have at least 10 characters.' };
   if (fields.temporaryPassword !== fields.confirmPassword) return { error: 'Passwords do not match.' };
   return { fields };
@@ -99,8 +132,8 @@ function safeStaff(row, privateRow = null, fullBank = false) {
     monthlySalary: Number(row.monthly_salary || 0), baseSalary: Number(row.base_salary || 0), perClassRate: Number(row.per_class_rate || 0), hourlyRate: Number(row.hourly_rate || 0),
     pfPercent: Number(row.pf_percent ?? 12), tdsPercent: Number(row.tds_percent || 0), branches: Array.isArray(row.branch_ids) ? row.branch_ids : [],
     assignments: Array.isArray(row.assignments) ? row.assignments : [], photoPath: row.photo_path || null, photoUpdatedAt: row.photo_updated_at || null,
-    photoUrl: row.photo_url || null, accountLast4: maskAccount(bank.bank_account_number), panMasked: maskPan(bank.pan_number), bankName: bank.bank_name || '',
-    ...(fullBank ? { bankAccountNumber: bank.bank_account_number || '', ifscCode: bank.ifsc_code || '', panNumber: bank.pan_number || '' } : {}),
+    photoUrl: row.photo_url || null, accountHolderName: bank.account_holder_name || '', accountLast4: maskAccount(bank.bank_account_number), panMasked: maskPan(bank.pan_number), bankName: bank.bank_name || '', branch: bank.branch || '', upiId: fullBank ? (bank.upi_id || '') : (bank.upi_id ? maskAccount(bank.upi_id) : ''), paymentMode: bank.payment_mode || 'both', hasPaymentDetails: Boolean(bank.bank_account_number || bank.upi_id),
+    ...(fullBank ? { bankAccountNumber: bank.bank_account_number || '', ifscCode: bank.ifsc_code || '', panNumber: bank.pan_number || '', upiId: bank.upi_id || '', branch: bank.branch || '', accountHolderName: bank.account_holder_name || '', paymentMode: bank.payment_mode || 'both' } : {}),
   };
 }
 
@@ -145,7 +178,7 @@ const staffSelect = `
   ),
   page_rows as (
     select f.*,coalesce(a.assignments,'[]'::jsonb) as assignments,
-      p.bank_account_number,p.bank_name,p.ifsc_code,p.pan_number
+      p.bank_account_number,p.bank_name,p.ifsc_code,p.pan_number,p.account_holder_name,p.branch,p.upi_id,p.payment_mode
     from page f
     left join assignment_totals a on a.staff_id=f.id
     left join public.staff_private p on p.staff_id=f.id
@@ -266,7 +299,7 @@ async function insertStaff(client, fields) {
   [staffId, staffKey, employeeId, fields.name, fields.email, fields.phone, fields.status, fields.staffType, fields.qualification, fields.specialization, fields.experienceYears, fields.joiningDate, fields.bio, fields.employmentType, fields.monthlySalary, fields.baseSalary, fields.perClassRate, fields.hourlyRate, fields.pfPercent, fields.tdsPercent, JSON.stringify(fields.branches), JSON.stringify(staffRecord)]);
   await client.query(`insert into public.accounts(id,email,role,name,student_id,password_hash,password_salt,must_change_password,session_version,record_json)
     values($1,$2,'teacher',$3,$4,$5,$6,true,0,$7::jsonb)`, [accountId, fields.email, fields.name, staffId, accountRecord.passwordHash, salt, JSON.stringify(accountRecord)]);
-  if (fields.bankAccountNumber || fields.bankName || fields.ifscCode || fields.panNumber) await client.query(`insert into public.staff_private(staff_id,bank_account_number,bank_name,ifsc_code,pan_number) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''))`, [staffId, fields.bankAccountNumber, fields.bankName, fields.ifscCode, fields.panNumber]);
+  if (fields.bankAccountNumber || fields.bankName || fields.ifscCode || fields.panNumber || fields.upiId || fields.accountHolderName) await client.query(`insert into public.staff_private(staff_id,bank_account_number,bank_name,ifsc_code,pan_number,account_holder_name,branch,upi_id,payment_mode) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),nullif($8,''),coalesce(nullif($9,''),'both'))`, [staffId, fields.bankAccountNumber, fields.bankName, fields.ifscCode, fields.panNumber, fields.accountHolderName, fields.branch, fields.upiId, fields.paymentMode]);
   await persistAssignments(client, staffId, fields.assignments);
   await saveStaffRecords(client, staffId, staffRecord, accountRecord);
   return { id: staffId, staffKey, employeeId, accountId, name: fields.name };
@@ -322,7 +355,7 @@ async function getRelated(staffId, staffKey, employeeId) {
 }
 
 async function getOne(staffKey, editMode) {
-  const { rows } = await getPool().query(`select s.*,coalesce(a.assignments,'[]'::jsonb) assignments,p.bank_account_number,p.bank_name,p.ifsc_code,p.pan_number
+  const { rows } = await getPool().query(`select s.*,coalesce(a.assignments,'[]'::jsonb) assignments,p.bank_account_number,p.bank_name,p.ifsc_code,p.pan_number,p.account_holder_name,p.branch,p.upi_id,p.payment_mode
     from public.staff s left join public.staff_private p on p.staff_id=s.id
     left join lateral (select jsonb_agg(jsonb_build_object('id',x.id,'courseId',x.course_id,'courseName',coalesce(c.name,''),'subjectId',x.subject_id,'subjectName',coalesce(u.name,''),'batchId',x.batch_id,'batchName',coalesce(b.name,'All Batches')) order by c.name,u.name,b.name) assignments
       from public.staff_subject_assignments x left join public.courses c on c.id=x.course_id left join public.subjects u on u.id=x.subject_id left join public.batches b on b.id=x.batch_id where x.staff_id=s.id) a on true
@@ -377,15 +410,15 @@ async function handleStaffRoute(req,res,url,input,actor) {
       res.statusCode=200;res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="my-jee-mentor-staff.csv"');res.end(csvData(rows,includeBank));return true;
     }
     if(!suffix&&req.method==='POST'){
-      const parsed=parseStaff(input);if(parsed.error)return send(400,{error:parsed.error});
+      const parsed=parseStaff(input, true);if(parsed.error)return send(400,{error:parsed.error});
       const client=await getPool().connect();try{await client.query('begin');const created=await insertStaff(client,parsed.fields);await client.query('commit');invalidateStats();return send(201,{record:{staffKey:created.staffKey,employeeId:created.employeeId,name:created.name}});}catch(error){await client.query('rollback');if(error.code==='23505')return send(409,{error:'Email or employee ID is already assigned.'});throw error;}finally{client.release();}
     }
     const [staffKey,action]=suffix.split('/');
     if(!staffKey)return send(404,{error:'Staff route not found.'});
     if(!action&&req.method==='GET'){const detail=await getOne(staffKey,url.searchParams.get('edit')==='1');return detail?send(200,detail):send(404,{error:'Staff member was not found.'});}
     if(!action&&req.method==='PUT'){
-      const parsed=parseStaff(input);if(parsed.error)return send(400,{error:parsed.error});const fields=parsed.fields;
-      const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const old=found.rows[0];if(fields.employeeId!==old.employee_id){const dupe=await client.query('select 1 from public.staff where lower(employee_id)=lower($1) and id<>$2',[fields.employeeId,old.id]);if(dupe.rowCount){await client.query('rollback');return send(409,{error:'That employee ID is already assigned.'});}await reserveManualEmployeeId(client,fields.employeeId);}const refs=validateReferences(fields,await getLookups());if(refs){await client.query('rollback');return send(400,{error:refs});}const record=makeRecord(fields,old.id,old.staff_key,fields.employeeId,old.record_json);await client.query(`update public.staff set employee_id=$2,name=$3,phone=$4,status=$5,staff_type=$6,qualification=$7,specialization=$8,experience_years=$9,joining_date=nullif($10,'')::date,bio=$11,employment_type=$12,monthly_salary=$13,base_salary=$14,per_class_rate=$15,hourly_rate=$16,pf_percent=$17,tds_percent=$18,branch_ids=$19::jsonb,record_json=$20::jsonb,updated_at=now() where id=$1`,[old.id,fields.employeeId,fields.name,fields.phone,fields.status,fields.staffType,fields.qualification,fields.specialization,fields.experienceYears,fields.joiningDate,fields.bio,fields.employmentType,fields.monthlySalary,fields.baseSalary,fields.perClassRate,fields.hourlyRate,fields.pfPercent,fields.tdsPercent,JSON.stringify(fields.branches),JSON.stringify(record)]);await client.query('update public.accounts set name=$2,record_json=record_json||jsonb_build_object(\'name\',$2,\'staffType\',$3),updated_at=now() where student_id=$1 and role=\'teacher\'',[old.id,fields.name,fields.staffType]);await persistAssignments(client,old.id,fields.assignments);await saveStaffRecords(client,old.id,record);await client.query('commit');invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
+      const parsed=parseStaff(input, true);if(parsed.error)return send(400,{error:parsed.error});const fields=parsed.fields;
+      const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const old=found.rows[0];if(fields.employeeId!==old.employee_id){const dupe=await client.query('select 1 from public.staff where lower(employee_id)=lower($1) and id<>$2',[fields.employeeId,old.id]);if(dupe.rowCount){await client.query('rollback');return send(409,{error:'That employee ID is already assigned.'});}await reserveManualEmployeeId(client,fields.employeeId);}const refs=validateReferences(fields,await getLookups());if(refs){await client.query('rollback');return send(400,{error:refs});}const record=makeRecord(fields,old.id,old.staff_key,fields.employeeId,old.record_json);await client.query(`update public.staff set employee_id=$2,name=$3,phone=$4,status=$5,staff_type=$6,qualification=$7,specialization=$8,experience_years=$9,joining_date=nullif($10,'')::date,bio=$11,employment_type=$12,monthly_salary=$13,base_salary=$14,per_class_rate=$15,hourly_rate=$16,pf_percent=$17,tds_percent=$18,branch_ids=$19::jsonb,record_json=$20::jsonb,updated_at=now() where id=$1`,[old.id,fields.employeeId,fields.name,fields.phone,fields.status,fields.staffType,fields.qualification,fields.specialization,fields.experienceYears,fields.joiningDate,fields.bio,fields.employmentType,fields.monthlySalary,fields.baseSalary,fields.perClassRate,fields.hourlyRate,fields.pfPercent,fields.tdsPercent,JSON.stringify(fields.branches),JSON.stringify(record)]);await client.query('update public.accounts set name=$2,record_json=record_json||jsonb_build_object(\'name\',$2,\'staffType\',$3),updated_at=now() where student_id=$1 and role=\'teacher\'',[old.id,fields.name,fields.staffType]);await persistAssignments(client,old.id,fields.assignments);await client.query(`insert into public.staff_private(staff_id,account_holder_name,bank_name,bank_account_number,ifsc_code,branch,upi_id,payment_mode,pan_number,updated_at) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),coalesce(nullif($8,''),'both'),nullif($9,''),now()) on conflict(staff_id) do update set account_holder_name=excluded.account_holder_name,bank_name=excluded.bank_name,bank_account_number=excluded.bank_account_number,ifsc_code=excluded.ifsc_code,branch=excluded.branch,upi_id=excluded.upi_id,payment_mode=excluded.payment_mode,pan_number=coalesce(excluded.pan_number,staff_private.pan_number),updated_at=now()`,[old.id,fields.accountHolderName,fields.bankName,fields.bankAccountNumber,fields.ifscCode,fields.branch,fields.upiId,fields.paymentMode,fields.panNumber]);await saveStaffRecords(client,old.id,record);await client.query('commit');invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
     }
     if(action==='status'&&req.method==='POST'){
       const status=input.status==='active'?'active':input.status==='inactive'?'inactive':'';if(!status)return send(400,{error:'Choose active or inactive status.'});const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const row=found.rows[0],account=await client.query("select id,email,record_json from public.accounts where student_id=$1 and role='teacher' for update",[row.id]);const record={...row.record_json,status};await client.query('update public.staff set status=$2,record_json=record_json||jsonb_build_object(\'status\',$2),updated_at=now() where id=$1',[row.id,status]);if(status==='inactive')await deactivateAccount(client,row.id,account.rows[0]);else if(account.rows[0]){const envPassword=process.env.DEFAULT_STAFF_PASSWORD||'';if(envPassword.length<10){await client.query('rollback');return send(400,{error:'Set DEFAULT_STAFF_PASSWORD to a value at least 10 characters long before activating staff.'});}const salt=crypto.randomBytes(16).toString('base64url'),hash=await passwordHash(envPassword,salt),version=Number(account.rows[0].record_json?.sessionVersion||0)+1,accountJson={...account.rows[0].record_json,status:'active',passwordSalt:salt,passwordHash:hash,mustChangePassword:true,sessionVersion:version};await client.query('update public.accounts set password_hash=$2,password_salt=$3,must_change_password=true,session_version=$4,record_json=$5::jsonb,updated_at=now() where id=$1',[account.rows[0].id,hash,salt,version,JSON.stringify(accountJson)]);await client.query('delete from public.login_failures where email=$1',[account.rows[0].email]);await client.query('update public.app_records set record_json=$3::jsonb,updated_at=now() where source_tab=$1 and record_id=$2',['Students',account.rows[0].id,JSON.stringify({_type:'account',...accountJson})]);}await saveStaffRecords(client,row.id,record);await client.query('commit');invalidateStats();return send(200,{ok:true,status});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
