@@ -117,8 +117,8 @@ async function changeAccountPassword(accountId, currentPassword, nextPassword) {
   await loadAccounts();
   const account = accounts.find(item => item.id === accountId);
   if (!account || !(await verifyPassword(String(currentPassword || ''), account.passwordSalt, account.passwordHash))) return null;
-  if (nextPassword.length < 10 || Object.values(initialPasswords).filter(Boolean).includes(nextPassword)) {
-    const error = new Error('Choose a password with at least 10 characters that differs from the initial default password.');
+  if (nextPassword.length < 8 || Object.values(initialPasswords).filter(Boolean).includes(nextPassword)) {
+    const error = new Error('Choose a password with at least 8 characters that differs from the initial default password.');
     error.code = 'PASSWORD_POLICY';
     throw error;
   }

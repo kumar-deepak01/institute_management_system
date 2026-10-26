@@ -105,6 +105,10 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
     }
   }
 
+  if (url.pathname === '/api/student/profile' || url.pathname === endpoint) {
+    if (req.method !== 'GET') return json(res, 403, { error: 'Your details are managed by your institute. Contact the administrator to update them.' });
+  }
+
   if (url.pathname !== endpoint) return null;
   if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed.' });
   if (!(deps.getSession || getSession)(req)) return json(res, 401, { error: 'Sign in required.' });

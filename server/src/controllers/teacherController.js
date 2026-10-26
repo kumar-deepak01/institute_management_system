@@ -373,25 +373,40 @@ async function handleTeacherRoute(req, res, url, deps = {}) {
 
     if (req.method === 'GET' && path === '/api/teacher/profile') {
       const refs = await context();
-      return send(res, 200, { profile: { id: staff.id, name: staff.name || '', email: staff.email || '', phone: staff.phone || '', employeeId: staff.employee_id || '', qualification: staff.qualification || '', specialization: staff.specialization || '', experience: Number(staff.experience_years || 0), bio: staff.bio || '', subjects: refs.subjects.map(item => item.name) } });
+      const rJson = parseJson(staff);
+      return send(res, 200, {
+        profile: {
+          id: staff.id,
+          name: staff.name || '',
+          email: staff.email || '',
+          phone: staff.phone || '',
+          employeeId: staff.employee_id || rJson.employeeId || '',
+          qualification: staff.qualification || rJson.qualification || '',
+          specialization: staff.specialization || rJson.specialization || '',
+          experience: Number(staff.experience_years || rJson.experienceYears || 0),
+          bio: staff.bio || rJson.bio || '',
+          role: rJson.role || rJson.staffType || 'Teacher',
+          dateOfBirth: rJson.dateOfBirth || rJson.dob || '',
+          joiningDate: rJson.joiningDate || '',
+          employmentType: rJson.employmentType || '',
+          paymentDetails: rJson.paymentDetails || null,
+          subjects: refs.subjects.map(item => item.name)
+        }
+      });
     }
     if (req.method === 'PUT' && path === '/api/teacher/profile') {
-      const name = clean(input.name, 160), phone = clean(input.phone, 40), qualification = clean(input.qualification, 200), specialization = clean(input.specialization, 200), bio = clean(input.bio, 3000), experience = Math.max(0, Math.min(80, Number(input.experience) || 0));
-      if (!name) return send(res, 400, { error: 'Full name is required.' });
-      const current = parseJson(staff);
-      const subjects = Array.isArray(input.subjects) ? [...new Set(input.subjects.map(value => clean(value, 80)).filter(Boolean))].slice(0, 30) : (current.subjects || []);
-      const updated = { ...current, name, phone, qualification, specialization, experienceYears: experience, bio, subjects };
-      await queryWithLimit(() => pool.query(`update public.staff set name=$2,phone=$3,qualification=$4,specialization=$5,experience_years=$6,bio=$7,record_json=$8::jsonb,updated_at=now() where id=$1`, [staffId, name, phone, qualification, specialization, experience, bio, JSON.stringify(updated)]));
-      return send(res, 200, { profile: { id: staffId, name, email: staff.email, phone, employeeId: staff.employee_id, qualification, specialization, experience, bio, subjects } });
+      return send(res, 403, { error: 'Your details are managed by your institute administrator. Contact the administrator to update them.' });
     }
     if (req.method === 'POST' && path === '/api/teacher/password') {
       const currentPassword = String(input.currentPassword || ''), password = String(input.password || ''), confirmPassword = String(input.confirmPassword || '');
-      if (!currentPassword || password.length < 10 || password !== confirmPassword) return send(res, 400, { error: password !== confirmPassword ? 'Passwords do not match.' : 'Provide your current password and a new password of at least 10 characters.' });
+      if (!currentPassword) return send(res, 400, { error: 'Current password is required.' });
+      if (password.length < 8) return send(res, 400, { error: 'New password must be at least 8 characters long.' });
+      if (password !== confirmPassword) return send(res, 400, { error: 'New password and confirmation do not match.' });
       try {
         const updatedAccount = await changeAccountPassword(auth.account.id, currentPassword, password);
         if (!updatedAccount) return send(res, 400, { error: 'Current password is incorrect.' });
         setSession(req, res, updatedAccount);
-        return send(res, 200, { ok: true });
+        return send(res, 200, { ok: true, message: 'Password changed ✓' });
       } catch (error) {
         if (error.code === 'PASSWORD_POLICY') return send(res, 400, { error: error.message });
         throw error;

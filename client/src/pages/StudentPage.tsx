@@ -50,6 +50,7 @@ function StudentWorkspace() {
   const [localRead,setLocalRead] = useState<string[]>(()=>{try{return JSON.parse(window.localStorage.getItem('student-read-notices')||'[]') as string[]}catch{return []}});
   const [busy,setBusy] = useState(false); const [message,setMessage] = useState(''); const [accountError,setAccountError] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string; sub?: string } | null>(null);
+  const [joinModal, setJoinModal] = useState<{ show: boolean; subjectName: string; batchName?: string; time: string } | null>(null);
   const [busyJoinId, setBusyJoinId] = useState<string | null>(null);
 
   const showToast = (type: 'success' | 'error', message: string, sub?: string) => {
@@ -61,12 +62,20 @@ function StudentWorkspace() {
     setBusyJoinId(String(classItem.id));
     try {
       const res = await joinLiveClass(String(classItem.id));
-      showToast('success', res.message || 'Attendance marked ✓', `${res.subjectName || ''} • ${res.date || ''} ${res.time || ''}`);
-      if (res.meetingUrl) {
-        setTimeout(() => {
+      const subj = res.subjectName || classItem.subject_name || classItem.subjectName || 'Class';
+      const tStr = res.time || new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+      setJoinModal({
+        show: true,
+        subjectName: subj,
+        batchName: profile?.batchName || '',
+        time: tStr
+      });
+      setTimeout(() => {
+        setJoinModal(null);
+        if (res.meetingUrl) {
           window.open(res.meetingUrl, '_blank');
-        }, 500);
-      }
+        }
+      }, 2500);
       void getStudentPortal(month).then(next => setData(next.data));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not join class';
@@ -106,6 +115,15 @@ function StudentWorkspace() {
         <div>
           <div>{toast.message}</div>
           {toast.sub && <div className="text-xs font-normal text-white/90">{toast.sub}</div>}
+        </div>
+      </div>
+    )}
+    {joinModal?.show && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 backdrop-blur-sm p-4">
+        <div className="rounded-2xl border-2 border-emerald-600 bg-white p-7 shadow-2xl text-center max-w-sm w-full dark:bg-slate-900">
+          <h3 className="text-lg font-black text-emerald-600 flex items-center justify-center gap-2">Attendance marked <span className="text-xl">✓</span></h3>
+          <p className="mt-1.5 text-sm font-semibold text-slate-700 dark:text-slate-200">{joinModal.subjectName}{joinModal.batchName ? `, ${joinModal.batchName}` : ''}, {joinModal.time}</p>
+          <p className="mt-3 text-xs text-slate-400">Opening Zoom meeting in a moment…</p>
         </div>
       </div>
     )}
@@ -219,6 +237,7 @@ function Attendance({
         </div>
       )}
 
+
       {/* Subject-wise Cards */}
       <Section title="Subject-wise Attendance">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -320,6 +339,7 @@ function Attendance({
             </div>
           </div>
         )}
+
         <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-600">
           {[['Present', 'bg-emerald-500'], ['Absent', 'bg-rose-500'], ['Late', 'bg-amber-500'], ['Excused', 'bg-sky-500']].map(([label, color]) => (
             <span key={label} className="flex items-center gap-2">
@@ -364,6 +384,7 @@ function Attendance({
         ) : (
           <Empty>No live class joins recorded yet this month.</Empty>
         )}
+
       </Section>
     </div>
   );
@@ -413,6 +434,7 @@ function LiveClasses({
       ) : (
         <Empty>No live classes are scheduled for your batch.</Empty>
       )}
+
     </Section>
   );
 }
@@ -427,6 +449,6 @@ function IdCard({profile,onPrint}:{profile:StudentPortalProfile;onPrint:()=>void
 function Certificates(){return <Section title="My Documents"><div className="grid gap-4 md:grid-cols-3">{['ID Card','Bonafide Certificate','Character Certificate'].map((name,index)=><article key={name} className="rounded-xl border border-slate-100 p-5"><span className="grid h-11 w-11 place-items-center rounded-xl bg-orange-50 student-accent-text"><AdminIcon name={index?'file':'student'} className="h-5 w-5"/></span><h3 className="mt-4 font-bold">{name}</h3><p className="mt-1 text-xs text-slate-500">{index?'No document has been issued.':'Available from your student profile.'}</p>{!index&&<a href="/student/id-card" className="mt-3 inline-block text-sm font-bold student-accent-text">View ID Card →</a>}</article>)}</div></Section>}
 function Messages(){return <div className={`${panel} grid min-h-[520px] overflow-hidden md:grid-cols-[280px_1fr]`}><section className="border-b border-slate-100 p-5 md:border-b-0 md:border-r"><h2 className="font-extrabold">Contacts</h2><input className={`${input} mt-4`} placeholder="Search contacts..." disabled/><Empty>No messaging contacts available yet.</Empty></section><section className="grid place-items-center p-6 text-center"><div><AdminIcon name="chat" className="mx-auto h-10 w-10 text-slate-400"/><h2 className="mt-3 font-bold">Select a contact to start messaging</h2><p className="mt-2 max-w-md text-sm text-slate-500">Direct student messaging is not enabled in the current message storage.</p><div className="mt-5 flex gap-2"><input className={input} placeholder="Write a message..." disabled/><button disabled className={`${button} student-primary`}>Send</button></div></div></section></div>}
 function Notifications({rows,unread,localRead,onMarkRead}:{rows:Row[];unread:number;localRead:string[];onMarkRead:()=>void}){return <Section title={`${unread} unread notification${unread===1?'':'s'}`} action={<button disabled={!unread} onClick={onMarkRead} className={`${button} border border-slate-200`}>Mark All Read</button>}>{rows.length?<div className="space-y-3">{rows.map((row,index)=>{const read=localRead.includes(String(row.id));return <article key={row.id||index} className="flex flex-wrap items-center gap-4 rounded-xl border border-slate-100 p-4"><span className={`grid h-10 w-10 place-items-center rounded-full ${read?'bg-slate-100 text-slate-500':'bg-orange-50 student-accent-text'}`}><AdminIcon name="bell" className="h-5 w-5"/></span><div className="min-w-0 flex-1"><p className="font-bold">{row.title||'Parent Teacher Meeting update'}</p><p className="mt-1 text-sm text-slate-500">{row.batch_name} · {row.teacher_name} · {formatDate(row.scheduled_at)}</p></div><span className="text-xs text-slate-500">{read?'Read':'Unread'}</span>{row.status==='scheduled'&&row.meeting_url&&<a href={row.meeting_url} target="_blank" rel="noreferrer" className={`${button} student-primary`}>View / Join</a>}</article>})}<p className="text-xs text-slate-500">Read status is kept on this device. Your institute has not enabled server-side notification receipts.</p></div>:<Empty>No notifications yet.</Empty>}</Section>}
-function Profile({profile,account}:{profile:StudentPortalProfile;account:Row|null}){return <div className="grid gap-5 xl:grid-cols-[.8fr_1.5fr]"><Section title="My Profile"><div className="text-center"><span className="mx-auto grid h-24 w-24 place-items-center rounded-full bg-orange-500 text-3xl font-black text-white">{initials(profile.name)}</span><h2 className="mt-4 text-xl font-black">{profile.name}</h2><p className="mt-1 text-sm text-slate-500">Admission No: {profile.admissionNumber}</p><span className="mt-3 inline-block rounded-full bg-orange-100 px-3 py-1 text-xs font-bold text-orange-900">{profile.batchName||'No batch assigned'}</span></div><div className="mt-6 space-y-3 text-sm"><p className="flex justify-between gap-3 border-t border-slate-100 pt-3"><span className="text-slate-500">Course</span><b>{profile.courseName||'—'}</b></p><p className="flex justify-between gap-3 border-t border-slate-100 pt-3"><span className="text-slate-500">Status</span><b>{profile.status}</b></p></div></Section><div className="space-y-5"><Section title="Personal Information"><div className="grid gap-4 sm:grid-cols-2">{[['Full Name',profile.name],['Email',profile.email],['Phone',profile.phone],['Date of Birth',formatDate(profile.dateOfBirth)]].map(([label,value])=><label key={label} className="text-xs font-black uppercase tracking-wide text-slate-600">{label}<input readOnly value={value||'—'} className={`${input} mt-1.5 bg-slate-50 font-normal normal-case tracking-normal`}/></label>)}</div><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Profile editing is disabled for your branch.</p></Section><Section title="Change Password"><p className="text-sm text-slate-500">{account?.mustChangePassword?'Use the secure password-change flow to update your initial password.':'Password changes are managed by your institute administrator.'}</p>{account?.mustChangePassword&&<a href="/change-password" className="mt-3 inline-block font-bold student-accent-text">Change your password →</a>}</Section><Section title="My Documents"><div className="grid gap-3 sm:grid-cols-3">{['ID Card','Bonafide Certificate','Character Certificate'].map((item,index)=><a key={item} href={index===0?'/student/id-card':'/student/certificates'} className="rounded-xl border border-slate-100 p-4 font-bold hover:border-orange-300">{item}<span className="mt-2 block text-xs font-normal text-slate-500">{index===0?'View / print':'No document available'}</span></a>)}</div></Section></div></div>}
+function Profile({profile,account}:{profile:StudentPortalProfile;account:Row|null}){return <div className="grid gap-5 xl:grid-cols-[.8fr_1.5fr]"><Section title="My Profile"><div className="text-center"><span className="mx-auto grid h-24 w-24 place-items-center rounded-full bg-orange-500 text-3xl font-black text-white">{initials(profile.name)}</span><h2 className="mt-4 text-xl font-black">{profile.name}</h2><p className="mt-1 text-sm text-slate-500">Admission No: {profile.admissionNumber}</p><span className="mt-3 inline-block rounded-full bg-orange-100 px-3 py-1 text-xs font-bold text-orange-900">{profile.batchName||'No batch assigned'}</span></div><div className="mt-6 space-y-3 text-sm"><p className="flex justify-between gap-3 border-t border-slate-100 pt-3"><span className="text-slate-500">Course</span><b>{profile.courseName||'—'}</b></p><p className="flex justify-between gap-3 border-t border-slate-100 pt-3"><span className="text-slate-500">Status</span><b>{profile.status}</b></p></div></Section><div className="space-y-5"><Section title="Personal Information"><div className="grid gap-4 sm:grid-cols-2">{[['Full Name',profile.name],['Email',profile.email],['Phone',profile.phone],['Date of Birth',formatDate(profile.dateOfBirth)]].map(([label,value])=><div key={label} className="text-xs font-black uppercase tracking-wide text-slate-600">{label}<div className="mt-1.5 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3.5 py-2.5 text-sm font-normal normal-case tracking-normal text-slate-800 select-text cursor-default">{value||'—'}</div></div>)}</div><p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Your details are managed by your institute. Contact the administrator to update them.</p></Section><Section title="Change Password"><p className="text-sm text-slate-500">{account?.mustChangePassword?'Use the secure password-change flow to update your initial password.':'Password changes are managed by your institute administrator.'}</p>{account?.mustChangePassword&&<a href="/change-password" className="mt-3 inline-block font-bold student-accent-text">Change your password →</a>}</Section><Section title="My Documents"><div className="grid gap-3 sm:grid-cols-3">{['ID Card','Bonafide Certificate','Character Certificate'].map((item,index)=><a key={item} href={index===0?'/student/id-card':'/student/certificates'} className="rounded-xl border border-slate-100 p-4 font-bold hover:border-orange-300">{item}<span className="mt-2 block text-xs font-normal text-slate-500">{index===0?'View / print':'No document available'}</span></a>)}</div></Section></div></div>}
 function Doubts({rows,subjects}:{rows:Row[];subjects:Array<{id:string;name:string}>}){const [title,setTitle]=useState(''),[question,setQuestion]=useState(''),[subject,setSubject]=useState(''),[items,setItems]=useState(rows),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);useEffect(()=>setItems(rows),[rows]);const send=async(event:React.FormEvent)=>{event.preventDefault();if(!title.trim()||!question.trim()||!subject)return;setBusy(true);setNotice('');try{const {csrfToken}=await apiRequest<{csrfToken:string}>('/api/auth/csrf');const result=await apiRequest<{record:Row}>('/api/student/doubts',{method:'POST',headers:{'X-CSRF-Token':csrfToken},body:{title,question,subjectId:subject}});setItems(current=>[result.record,...current]);setTitle('');setQuestion('');setNotice('Your question was sent to your teacher.');}catch(cause){setNotice(cause instanceof Error?cause.message:'Your question could not be sent.');}finally{setBusy(false);}};return <div className="grid gap-5 xl:grid-cols-[1fr_1.2fr]"><Section title="Ask a question"><form onSubmit={event=>void send(event)} className="space-y-3"><input className={input} required maxLength={180} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Question title"/><label className="block text-xs font-bold">SUBJECT<select required className={`${input} mt-1.5`} value={subject} onChange={event=>setSubject(event.target.value)}><option value="">Choose subject</option>{subjects.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><textarea required maxLength={4000} rows={5} className={input} value={question} onChange={event=>setQuestion(event.target.value)} placeholder="Describe your doubt..."/><button disabled={busy||!subjects.length} className={`${button} student-primary`}>{busy?'Sending…':'Send question'}</button>{!subjects.length&&<p className="text-xs text-slate-500">Add subjects to your batch before submitting a question.</p>}{notice&&<p role="status" className="text-sm">{notice}</p>}</form></Section><Section title="My Doubts">{items.length?items.map((row,index)=><article key={row.id||index} className="mb-3 rounded-xl border border-slate-100 p-4"><div className="flex justify-between gap-3"><b>{row.title}</b><span className="text-xs text-slate-500">{row.status||'Open'}</span></div><p className="mt-2 text-sm text-slate-600">{row.question}</p><p className="mt-1 text-xs text-slate-500">{row.subjectName||''} · {formatDate(row.createdAt)}</p></article>):<Empty>No doubts submitted yet.</Empty>}</Section></div>}
 function Tutor(){return <Section title="AI Tutor"><div className="rounded-2xl bg-orange-50 p-5 text-orange-950"><h2 className="text-lg font-black">Study support</h2><p className="mt-2 text-sm">Your institute has not connected a student-facing AI Tutor service. Ask a teacher through My Doubts for help with a topic.</p><a href="/student/doubts" className="mt-4 inline-block font-bold text-orange-900 underline">Open My Doubts →</a></div><div className="mt-5 grid gap-4 sm:grid-cols-2"><article className="rounded-xl border border-slate-100 p-4"><h3 className="font-bold">Study plan</h3><p className="mt-1 text-sm text-slate-500">Your plan will appear here when one is shared with your account.</p></article><article className="rounded-xl border border-slate-100 p-4"><h3 className="font-bold">Recommended topics</h3><p className="mt-1 text-sm text-slate-500">Recommendations are not available yet.</p></article></div></Section>}

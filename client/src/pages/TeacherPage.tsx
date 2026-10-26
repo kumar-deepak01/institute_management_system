@@ -167,7 +167,7 @@ function TeacherWorkspace() {
         {page === 'exams' && <ExamsView data={data} loading={loading} onCreate={() => setDialog('exam')}/>}
         {page === 'results' && <ResultsView data={data} loading={loading}/>}
         {page === 'shared-files' && <FilesView data={data} loading={loading} onDownload={async item => { try { const result = await getTeacherPage<{url:string}>(`shared-files/${encodeURIComponent(item.id)}/download`); window.open(result.url, '_blank', 'noopener,noreferrer'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'File could not be opened.'); } }} onDelete={item => void perform(() => deleteTeacherPage(`shared-files/${encodeURIComponent(item.id)}`), 'File deleted.')}/>}
-        {page === 'profile' && <ProfileView profile={context?.profile || data.profile || {}} busy={busy} onSave={value => void perform(() => saveTeacherPage('profile','PUT',value), 'Profile changes saved.', refreshAll)} onPassword={value => void perform(() => saveTeacherPage('password','POST',value), 'Password updated.')} />}
+        {page === 'profile' && <ProfileView profile={context?.profile || data.profile || {}} busy={busy} onPassword={value => perform(() => saveTeacherPage('password','POST',value), 'Password changed ✓')} />}
         {page === 'leave' && <LeaveView data={data} loading={loading} busy={busy} onApply={value => void perform(() => saveTeacherPage('leave','POST',value), 'Leave request submitted for approval.')}/>}
         {page === 'payslips' && <PayslipView data={data} loading={loading} onDownload={async item => { try { const blob=await fetchTeacherPayslip(item.id),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`payslip-${String(item.periodStart||'period').slice(0,7)}.pdf`;link.click();URL.revokeObjectURL(url); } catch(cause) { setError(cause instanceof Error?cause.message:'Payslip could not be downloaded.'); } }}/ >}
         {page === 'my-attendance' && <MyAttendanceView data={data} loading={loading} month={myAttendanceMonth} setMonth={setMyAttendanceMonth}/>}
@@ -489,8 +489,301 @@ function HomeworkView({data,loading,onAssign,onReview}:{data:Row;loading:boolean
 function ExamsView({data,loading,onCreate}:{data:Row;loading:boolean;onCreate:()=>void}) { const rows:Row[]=data.records||[];return <Panel title="My Exams — Exams you have created" icon="quiz" action={<button className="text-sm font-bold text-blue-700" onClick={onCreate}>+ Create Exam</button>}><Table columns={['EXAM','BATCH','SCHEDULED','MARKS','SUBMISSIONS','STATUS','ACTIONS']} rows={rows} loading={loading} empty="No exams created yet. Create your first exam." renderRow={row=><tr key={row.id}><td className="px-4 py-3 font-bold">{row.title||row.name}</td><td className="px-4 py-3">{row.batchName||row.batchId}</td><td className="px-4 py-3">{row.scheduledAt?new Date(row.scheduledAt).toLocaleString():'—'}</td><td className="px-4 py-3">{row.totalMarks||row.maxMarks||'—'}</td><td className="px-4 py-3">{row.submissions||0}</td><td className="px-4 py-3">{row.status||'Scheduled'}</td><td className="px-4 py-3">—</td></tr>}/></Panel> }
 function ResultsView({data,loading}:{data:Row;loading:boolean}) { const rows:Row[]=data.records||[];return <Panel title="Student Results — Results from exams in your batches" icon="report"><Table columns={['STUDENT','EXAM','SUBJECT','SCORE','GRADE','DATE']} rows={rows} loading={loading} empty="No results found." renderRow={row=><tr key={row.id}><td className="px-4 py-3 font-bold">{row.studentName||row.student||'—'}</td><td className="px-4 py-3">{row.examName||row.exam||row.title||'—'}</td><td className="px-4 py-3">{row.subjectName||row.subject||'—'}</td><td className="px-4 py-3">{row.score??row.marks??'—'}</td><td className="px-4 py-3">{row.grade||'—'}</td><td className="px-4 py-3">{row.date||row.createdAt?.slice(0,10)||'—'}</td></tr>}/></Panel> }
 function FilesView({data,loading,onDownload,onDelete}:{data:Row;loading:boolean;onDownload:(row:Row)=>void;onDelete:(row:Row)=>void}) { const rows:Row[]=data.records||[];return <Panel title="Shared Files" icon="download"><Table columns={['FILE','BATCH','SUBJECT','UPLOADED','ACTIONS']} rows={rows} loading={loading} empty="No shared files yet. Upload a resource for one of your batches." renderRow={row=><tr key={row.id}><td className="px-4 py-3"><b>{row.title}</b><p className="text-xs text-slate-500">{row.fileName}</p></td><td className="px-4 py-3">{row.batchName}</td><td className="px-4 py-3">{row.subjectName||row.subjectId||'—'}</td><td className="px-4 py-3">{row.createdAt?.slice(0,10)||'—'}</td><td className="px-4 py-3"><div className="flex gap-2"><button onClick={()=>onDownload(row)} className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-bold text-blue-700">Download</button><button onClick={()=>onDelete(row)} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-bold text-rose-700">Delete</button></div></td></tr>}/></Panel> }
-function ProfileView({profile,busy,onSave,onPassword}:{profile:Row;busy:boolean;onSave:(value:Row)=>void;onPassword:(value:Row)=>void}) { const [subjects,setSubjects]=useState<string[]>(profile.subjects||[]),[subject,setSubject]=useState('');useEffect(()=>setSubjects(profile.subjects||[]),[profile.subjects]);return <div className="grid gap-5 xl:grid-cols-[.8fr_1.5fr]"><Panel title="My Profile" icon="person"><div className="text-center"><div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-blue-600 text-2xl font-black text-white">{String(profile.name||'T').slice(0,1).toUpperCase()}</div><h3 className="mt-3 text-lg font-black">{profile.name||'Teacher'}</h3><p className="text-sm text-slate-500">{profile.specialization||'Teacher'} · {profile.qualification||'Qualification not set'}</p></div><dl className="mt-5 divide-y divide-slate-100 text-sm">{[['Years Exp.',profile.experience||0],['Subjects',subjects.length],['Employee ID',profile.employeeId||'—']].map(([label,value])=><div key={String(label)} className="flex justify-between py-3"><dt className="text-slate-500">{label}</dt><dd className="font-bold">{String(value)}</dd></div>)}</dl></Panel><div className="space-y-5"><Panel title="Profile Information"><form className="grid gap-4 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);onSave({name:f.get('name'),phone:f.get('phone'),qualification:f.get('qualification'),specialization:f.get('specialization'),experience:f.get('experience'),bio:f.get('bio'),subjects});}}>{[['name','FULL NAME*',profile.name,'text'],['phone','PHONE',profile.phone,'tel'],['qualification','QUALIFICATION',profile.qualification,'text'],['specialization','SPECIALIZATION',profile.specialization,'text'],['experience','EXPERIENCE (YEARS)',profile.experience||0,'number']].map(([name,label,value,type])=><label key={String(name)} className="text-xs font-black text-slate-600">{label}<input name={String(name)} type={String(type)} defaultValue={String(value||'')} required={name==='name'} className={`${inputClass} mt-1.5 normal-case font-normal`}/></label>)}<label className="text-xs font-black text-slate-600">EMPLOYEE ID (READ-ONLY)<input readOnly value={profile.employeeId||''} className={`${inputClass} mt-1.5 bg-slate-50 normal-case font-normal`}/></label><div className="sm:col-span-2"><label className="text-xs font-black text-slate-600">SUBJECTS TAUGHT</label><div className="mt-1.5 flex gap-2"><input value={subject} onChange={e=>setSubject(e.target.value)} className={inputClass} placeholder="Add a subject"/><button type="button" className="rounded-xl border border-blue-200 px-4 text-sm font-bold text-blue-700" onClick={()=>{if(subject.trim()){setSubjects([...subjects,subject.trim()]);setSubject('');}}}>Add</button></div><div className="mt-2 flex flex-wrap gap-2">{subjects.map((item,index)=><button type="button" key={`${item}-${index}`} onClick={()=>setSubjects(subjects.filter((_,i)=>i!==index))} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{item} ×</button>)}</div><p className="mt-1 text-xs text-slate-400">These subjects will appear in the timetable scheduler.</p></div><label className="text-xs font-black text-slate-600 sm:col-span-2">BIO / ABOUT<textarea name="bio" defaultValue={profile.bio||''} className={`${inputClass} mt-1.5 min-h-24 normal-case font-normal`}/></label><div className="sm:col-span-2"><button className={buttonClass} disabled={busy}>{busy?'Saving…':'Save Changes'}</button></div></form></Panel><PasswordForm busy={busy} onSubmit={onPassword}/></div></div> }
-function PasswordForm({busy,onSubmit}:{busy:boolean;onSubmit:(v:Row)=>void}) { return <Panel title="Change Password" icon="shield"><form className="grid gap-3 sm:grid-cols-3" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget),password=String(f.get('password')||''),confirmPassword=String(f.get('confirmPassword')||'');if(password!==confirmPassword){alert('Passwords do not match.');return;}onSubmit({password,confirmPassword});}}>{[['currentPassword','Current password'],['password','New password'],['confirmPassword','Confirm password']].map(([name,label])=><label key={name} className="text-xs font-bold">{label}<input name={name} type="password" required minLength={8} className={`${inputClass} mt-1.5`}/></label>)}<button className={`${buttonClass} sm:col-span-3`} disabled={busy}>Update Password</button></form></Panel> }
+function ProfileView({profile,busy,onPassword}:{profile:Row;busy:boolean;onPassword:(value:Row)=>Promise<unknown>}) {
+  const subjects: string[] = Array.isArray(profile.subjects) ? profile.subjects : [];
+  const paymentDetails: Row = profile.paymentDetails || {};
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[.8fr_1.5fr]">
+      {/* Left Summary Card */}
+      <Panel title="My Profile" icon="person">
+        <div className="text-center">
+          <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-orange-500 text-2xl font-black text-white">
+            {String(profile.name || 'T').slice(0, 1).toUpperCase()}
+          </div>
+          <h3 className="mt-3 text-lg font-black text-slate-800 dark:text-white">{profile.name || 'Teacher'}</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {profile.specialization || 'Faculty'} · {profile.qualification || 'Qualification not set'}
+          </p>
+          <span className="mt-3 inline-block rounded-full bg-orange-100 dark:bg-orange-950/60 px-3 py-1 text-xs font-bold text-orange-800 dark:text-orange-300">
+            {profile.role || 'Teacher'}
+          </span>
+        </div>
+
+        <dl className="mt-5 divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+          {[
+            ['Employee ID', profile.employeeId || '—'],
+            ['Date of Birth', profile.dateOfBirth || '—'],
+            ['Joining Date', profile.joiningDate || '—'],
+            ['Employment Type', profile.employmentType || '—'],
+            ['Experience', `${profile.experience || 0} years`],
+            ['Assigned Subjects', subjects.length]
+          ].map(([label, value]) => (
+            <div key={String(label)} className="flex justify-between py-2.5">
+              <dt className="text-slate-500 dark:text-slate-400">{label}</dt>
+              <dd className="font-bold text-slate-800 dark:text-slate-200">{String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      </Panel>
+
+      {/* Right Column */}
+      <div className="space-y-5">
+        {/* Personal & Professional Details (Read-only) */}
+        <Panel title="Personal Information" icon="person">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {[
+              ['Full Name', profile.name],
+              ['Email', profile.email],
+              ['Phone', profile.phone],
+              ['Date of Birth', profile.dateOfBirth],
+              ['Employee ID', profile.employeeId],
+              ['Role / Designation', profile.role || 'Teacher'],
+              ['Qualification', profile.qualification],
+              ['Specialization', profile.specialization],
+              ['Experience', profile.experience ? `${profile.experience} years` : '—'],
+              ['Employment Type', profile.employmentType]
+            ].map(([label, value]) => (
+              <div key={String(label)} className="text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                {label}
+                <div className="mt-1.5 rounded-xl border border-slate-200/80 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/60 px-3.5 py-2.5 text-sm font-normal normal-case tracking-normal text-slate-800 dark:text-slate-200 select-text cursor-default">
+                  {String(value || '—')}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Subjects Taught */}
+          <div className="mt-5 border-t border-slate-100 dark:border-slate-800 pt-4">
+            <span className="text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+              Assigned Subjects
+            </span>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {subjects.length ? (
+                subjects.map((item, index) => (
+                  <span
+                    key={`${item}-${index}`}
+                    className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-bold text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/40 dark:text-orange-300"
+                  >
+                    {item}
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-slate-400">No subjects assigned yet.</span>
+              )}
+            </div>
+          </div>
+
+          {/* Saved Payout / Payment Details if present */}
+          {(paymentDetails.bankName || paymentDetails.bankAccountNumber || paymentDetails.upiId) && (
+            <div className="mt-5 rounded-2xl border border-orange-100 bg-orange-50/40 dark:border-orange-950/40 dark:bg-orange-950/20 p-4 text-xs">
+              <span className="font-extrabold uppercase tracking-wide text-orange-800 dark:text-orange-300 block mb-3">
+                Saved Payout Details (Confidential)
+              </span>
+              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                <div>
+                  <span className="text-slate-400 block font-semibold">Account Holder</span>
+                  <strong className="text-slate-900 dark:text-slate-100">{paymentDetails.accountHolderName || '—'}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold">Bank & Branch</span>
+                  <strong className="text-slate-900 dark:text-slate-100">{paymentDetails.bankName || '—'} {paymentDetails.branch ? `(${paymentDetails.branch})` : ''}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold">Account Number</span>
+                  <strong className="font-mono text-slate-900 dark:text-slate-100">{paymentDetails.bankAccountNumber ? `••••${paymentDetails.bankAccountNumber.slice(-4)}` : '—'}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold">IFSC Code</span>
+                  <strong className="font-mono text-slate-900 dark:text-slate-100">{paymentDetails.ifscCode || '—'}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold">UPI ID</span>
+                  <strong className="font-mono text-slate-900 dark:text-slate-100">{paymentDetails.upiId || '—'}</strong>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {profile.bio && (
+            <div className="mt-5 border-t border-slate-100 dark:border-slate-800 pt-4">
+              <span className="text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                Bio / About
+              </span>
+              <div className="mt-1.5 rounded-xl border border-slate-200/80 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/60 px-3.5 py-2.5 text-sm font-normal text-slate-800 dark:text-slate-200 select-text cursor-default">
+                {String(profile.bio)}
+              </div>
+            </div>
+          )}
+
+          <p className="mt-5 rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3 text-xs text-slate-500 dark:text-slate-400">
+            Your details are managed by your institute. Contact the administrator to update them.
+          </p>
+        </Panel>
+
+        {/* Change Password */}
+        <PasswordForm busy={busy} onSubmit={onPassword} />
+      </div>
+    </div>
+  );
+}
+
+function PasswordForm({busy,onSubmit}:{busy:boolean;onSubmit:(v:Row)=>Promise<unknown>}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (!currentPassword.trim()) {
+      setError('Please enter your current password.');
+      return;
+    }
+    if (password.length < 8) {
+      setError('New password must be at least 8 characters long.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('New password and confirmation do not match.');
+      return;
+    }
+
+    try {
+      await onSubmit({ currentPassword, password, confirmPassword });
+      setCurrentPassword('');
+      setPassword('');
+      setConfirmPassword('');
+      setSuccess('Password changed ✓');
+      setTimeout(() => setSuccess(''), 4000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Password could not be changed.';
+      setError(msg);
+    }
+  };
+
+  return (
+    <Panel title="Change Password" icon="shield">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-300">
+            {success}
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label className="block text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+              Current password *
+            </label>
+            <div className="relative mt-1.5">
+              <input
+                type={showCurrent ? 'text' : 'password'}
+                required
+                value={currentPassword}
+                onChange={e => setCurrentPassword(e.target.value)}
+                placeholder="••••••••"
+                className={`${inputClass} pr-10`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowCurrent(!showCurrent)}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+                aria-label={showCurrent ? 'Hide password' : 'Show password'}
+              >
+                {showCurrent ? (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+              New password (min 8 chars) *
+            </label>
+            <div className="relative mt-1.5">
+              <input
+                type={showNew ? 'text' : 'password'}
+                required
+                minLength={8}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className={`${inputClass} pr-10`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowNew(!showNew)}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+                aria-label={showNew ? 'Hide password' : 'Show password'}
+              >
+                {showNew ? (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-black uppercase tracking-wide text-slate-600 dark:text-slate-400">
+              Confirm new password *
+            </label>
+            <div className="relative mt-1.5">
+              <input
+                type={showConfirm ? 'text' : 'password'}
+                required
+                minLength={8}
+                value={confirmPassword}
+                onChange={e => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                className={`${inputClass} pr-10`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirm(!showConfirm)}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+                aria-label={showConfirm ? 'Hide password' : 'Show password'}
+              >
+                {showConfirm ? (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-2 flex justify-end">
+          <button
+            type="submit"
+            className={`${buttonClass} bg-orange-600 hover:bg-orange-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-sm`}
+            disabled={busy}
+          >
+            {busy ? 'Updating…' : 'Update Password'}
+          </button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
 function LeaveView({data,loading,busy,onApply}:{data:Row;loading:boolean;busy:boolean;onApply:(value:Row)=>void}) { return <div className="grid gap-5 xl:grid-cols-[1.5fr_.8fr]"><Panel title="Leave History" icon="eventOff">{loading?<Loading/>:(data.records||[]).length?<div className="overflow-x-auto"><table className="w-full min-w-[540px] text-sm"><thead className="bg-blue-50 text-left text-xs font-black uppercase"><tr>{['TYPE','DATES','DAYS','REASON','STATUS'].map(item=><th key={item} className="px-3 py-3">{item}</th>)}</tr></thead><tbody className="divide-y">{data.records.map((row:Row)=><tr key={row.id}><td className="px-3 py-3">{row.leaveType}</td><td className="px-3 py-3">{row.startDate} – {row.endDate}</td><td className="px-3 py-3">{Math.ceil((new Date(row.endDate).getTime()-new Date(row.startDate).getTime())/86400000)+1}</td><td className="px-3 py-3">{row.reason}</td><td className="px-3 py-3">{row.status}</td></tr>)}</tbody></table></div>:<Empty title="No leave requests found"/>}</Panel><div className="space-y-5"><Panel title="Apply for Leave" icon="event"><form className="grid gap-3" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);onApply({leaveType:f.get('leaveType'),startDate:f.get('startDate'),endDate:f.get('endDate'),reason:f.get('reason')});}}><label className="text-xs font-bold">Leave type<select name="leaveType" className={`${inputClass} mt-1`}><option>Casual</option><option>Sick</option><option>Annual</option><option>Other</option></select></label><label className="text-xs font-bold">From<input name="startDate" required type="date" className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">To<input name="endDate" required type="date" className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">Reason<textarea name="reason" required maxLength={1000} className={`${inputClass} mt-1 min-h-20`}/></label><button className={buttonClass} disabled={busy}>Submit Request</button></form></Panel><Panel title="Holiday Calendar" icon="calendar">{(data.holidays||[]).length?<div className="space-y-2">{data.holidays.map((row:Row)=><div key={row.id} className="rounded-xl bg-amber-50 p-3"><b className="text-sm">{row.title||row.name}</b><p className="text-xs text-slate-500">{row.startDate||row.date}{row.endDate?` – ${row.endDate}`:''}</p></div>)}</div>:<p className="py-4 text-center text-sm text-slate-500">No holidays added</p>}</Panel></div></div> }
 function PayslipView({data,loading,onDownload}:{data:Row;loading:boolean;onDownload:(item:Row)=>void}) {
   const rows: Row[] = data.records || [];
