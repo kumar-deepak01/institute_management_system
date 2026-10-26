@@ -66,112 +66,162 @@ async function attendance(req,res,url,auth){
   const endpoint=url.pathname;
   if(req.method==='GET'&&endpoint==='/api/admin/academics/attendance/live-summary'){
     const batchId=clean(url.searchParams.get('batchId'),120);
-    const date=clean(url.searchParams.get('date'),10)||'2026-10-25';
+    const dateParam=clean(url.searchParams.get('date'),10);
     try{
       const pool=getPool();
+
+      // 1. Available Dates with classes
+      const datesRes=await queryWithLimit(()=>pool.query(
+        `select distinct
+           to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD') as date_str,
+           to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'Dy, DD Mon YYYY') as label,
+           to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'FMDay, FMDD FMMonth YYYY') as full_label
+         from public.live_classes lc
+         where ($1='' or lc.batch_id=$1 or lc.batch_id is null)
+         order by date_str desc`,[batchId]
+      ));
+      const availableDates=(datesRes.rows||[]);
+      const activeDateStr=dateParam || availableDates[0]?.date_str || new Date().toISOString().slice(0,10);
+      const activeDateObj=availableDates.find(d=>d.date_str===activeDateStr) || {
+        date_str: activeDateStr,
+        label: activeDateStr,
+        full_label: activeDateStr
+      };
+
+      // 2. Batches
+      const batchesRes=await queryWithLimit(()=>pool.query(`select id, name from public.batches order by name`));
+      const availableBatches=batchesRes.rows||[];
+
+      // 3. Students
       const studentsRes=await queryWithLimit(()=>pool.query(
-        `select s.id,s.student_id,s.name,s.batch_id,b.name as batch_name,s.record_json->'subjects' as subjects
+        `select s.id, s.student_id, s.name, s.batch_id, b.name as batch_name, s.record_json->'subjects' as subjects
          from public.students s
          left join public.batches b on b.id=s.batch_id
          where ($1='' or s.batch_id=$1)
-         order by b.name,s.name`,[batchId]
+         order by b.name, s.name`,[batchId]
       ));
       const students=studentsRes.rows||[];
 
+      // 4. Classes on active date
       const classesRes=await queryWithLimit(()=>pool.query(
-        `select lc.id,lc.title,lc.batch_id,lc.subject_id,sub.name as subject_name,lc.scheduled_at,st.name as teacher_name
+        `select lc.id, lc.title, lc.batch_id, lc.subject_id, sub.name as subject_name, lc.scheduled_at,
+                st.name as teacher_name,
+                to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'FMHH12:MI AM') as class_time_str
          from public.live_classes lc
          left join public.subjects sub on sub.id=lc.subject_id
-         left join public.staff st on st.id::text=lc.teacher_id or st.staff_key::text=lc.teacher_id
-         where lc.scheduled_at::date=$1::date
-         order by lc.scheduled_at`,[date]
+         left join public.staff st on st.id=lc.teacher_key or st.staff_key::text=lc.teacher_key
+         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=$1
+           and ($2='' or lc.batch_id=$2 or lc.batch_id is null)
+         order by lc.scheduled_at`,[activeDateStr, batchId]
       ));
       const todayClasses=classesRes.rows||[];
 
+      // 5. Joins on active date
       const joinsRes=await queryWithLimit(()=>pool.query(
-        `select j.student_key,j.class_id,j.subject_id,j.status,j.joined_at
+        `select j.id, j.student_key, j.class_id, j.subject_id, j.status, j.joined_at,
+                to_char(j.joined_at at time zone 'Asia/Kolkata', 'FMHH12:MI AM') as join_time_str
          from public.live_class_joins j
-         where j.attendance_date=$1::date or j.joined_at::date=$1::date`,[date]
+         where to_char(coalesce(j.joined_at, j.attendance_date) at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=$1`,
+        [activeDateStr]
       ));
       const todayJoins=joinsRes.rows||[];
 
+      // 6. Subjects for table columns
       const subjectsRes=await queryWithLimit(()=>pool.query(
-        `select id,name,teacher_id from public.subjects where lower(coalesce(status,'active')) not in ('inactive','archived')
-         order by case when lower(name) like '%physics%' then 1 when lower(name) like '%chemistry%' then 2 when lower(name) like '%math%' then 3 when lower(name) like '%bio%' then 4 else 5 end, name`
+        `select id, name from public.subjects
+         where lower(coalesce(status,'active')) not in ('inactive','archived')
+         order by case
+           when lower(name) like '%physics%' then 1
+           when lower(name) like '%chemistry%' then 2
+           when lower(name) like '%math%' then 3
+           when lower(name) like '%bio%' then 4
+           else 5 end, name`
       ));
       const allSubjects=subjectsRes.rows||[];
-      const displaySubjects=['Physics','Chemistry','Maths','Biology'];
 
-      // KPIs
-      const totalClassesCountRes=await queryWithLimit(()=>pool.query(`select count(*)::int as c from public.live_classes`));
-      const totalJoinsCountRes=await queryWithLimit(()=>pool.query(`select count(*)::int as c from public.live_class_joins where lower(coalesce(status,''))='present'`));
-      const totalClasses=Math.max(41, Number(totalClassesCountRes.rows[0]?.c||0));
-      const autoMarkedJoins=Math.max(111, Number(totalJoinsCountRes.rows[0]?.c||0));
-      const liveClassesToday=todayClasses.length || 3;
-      const avgAttendanceRate=68;
+      const isBetaBatch = batchId && availableBatches.find(b => b.id === batchId)?.name?.toLowerCase().includes('beta');
+      const subjectColumns = batchId ? (
+        isBetaBatch
+          ? ['PHYSICS', 'CHEMISTRY', 'BIOLOGY']
+          : ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS']
+      ) : ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS', 'BIOLOGY'];
 
-      // Day Register Table rows
+      // 7. Real KPIs from DB
+      const totalClassesRes=await queryWithLimit(()=>pool.query(
+        `select count(*)::int as c from public.live_classes lc where ($1='' or lc.batch_id=$1 or lc.batch_id is null)`,
+        [batchId]
+      ));
+      const totalJoinsRes=await queryWithLimit(()=>pool.query(
+        `select count(*)::int as c from public.live_class_joins j where lower(coalesce(j.status,''))='present' and ($1='' or j.batch_id=$1)`,
+        [batchId]
+      ));
+      const todayClassesCountRes=await queryWithLimit(()=>pool.query(
+        `select count(*)::int as c from public.live_classes lc
+         where to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'YYYY-MM-DD')=to_char(now() at time zone 'Asia/Kolkata', 'YYYY-MM-DD')
+           and ($1='' or lc.batch_id=$1 or lc.batch_id is null)`,
+        [batchId]
+      ));
+
+      const totalClasses=Number(totalClassesRes.rows[0]?.c||0);
+      const autoMarkedJoins=Number(totalJoinsRes.rows[0]?.c||0);
+      const liveClassesToday=Number(todayClassesCountRes.rows[0]?.c||0);
+      const totalPossible=totalClasses * (students.length || 1);
+      const avgAttendanceRate=totalPossible > 0 ? Math.round((autoMarkedJoins / totalPossible) * 100) : 0;
+
+      // 8. Day Register Rows
       const dayRegisterRows=students.map(st=>{
         const enrolledSubjects=Array.isArray(st.subjects)?st.subjects:[];
         const rowSubjects={};
-        for(const subName of displaySubjects){
-          const matchedSub=allSubjects.find(s=>s.name.toLowerCase().includes(subName.toLowerCase()));
-          const isEnrolled=matchedSub ? enrolledSubjects.includes(matchedSub.id) : false;
+
+        for(const col of subjectColumns){
+          const matchedSub=allSubjects.find(s=>s.name.toUpperCase().includes(col));
+          const isEnrolled=matchedSub ? enrolledSubjects.includes(matchedSub.id) : true;
           if(!isEnrolled){
-            rowSubjects[subName]={ status:'Not enrolled' };
+            rowSubjects[col]={ status:'Not enrolled' };
             continue;
           }
-          const cls=todayClasses.find(c=>c.subject_name && c.subject_name.toLowerCase().includes(subName.toLowerCase()) && (!st.batch_id || c.batch_id===st.batch_id));
+
+          const cls=todayClasses.find(c=>
+            (matchedSub && c.subject_id===matchedSub.id) ||
+            (c.subject_name && c.subject_name.toUpperCase().includes(col))
+          );
+
           if(!cls){
-            // fallback if class time known for demo
-            rowSubjects[subName]={ status:'Absent', classTime:'class 10:30 AM' };
+            rowSubjects[col]={ status:'No class this day' };
             continue;
           }
-          const join=todayJoins.find(j=>j.student_key===st.id && j.class_id===cls.id);
-          if(join && String(join.status).toLowerCase()==='present'){
-            const d=new Date(join.joined_at);
-            const timeStr=d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
-            rowSubjects[subName]={ status:'Present', joinTime:`joined ${timeStr}` };
+
+          const join=todayJoins.find(j=>j.student_key===st.id && j.class_id===cls.id && String(j.status).toLowerCase()==='present');
+          if(join){
+            rowSubjects[col]={ status:'Present', joinTime:`Joined ${join.join_time_str || 'class'}` };
           } else {
-            const cd=new Date(cls.scheduled_at);
-            const timeStr=cd.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
-            rowSubjects[subName]={ status:'Absent', classTime:`class ${timeStr}` };
+            rowSubjects[col]={ status:'Absent', classTime:`Class at ${cls.class_time_str || 'scheduled time'}` };
           }
         }
+
         return {
           studentId: st.id,
           name: st.name,
           admissionNumber: st.student_id,
-          batchName: st.batch_name ? `Batch ${st.batch_name.replace(/^batch\s+/i,'')}` : 'Batch ALPHA',
+          batchName: `Batch ${st.batch_name ? st.batch_name.replace(/^batch\s+/i,'') : 'ALPHA'}`,
           subjects: rowSubjects
         };
       });
 
-      // Subject Matrix
-      const subjectMatrix=displaySubjects.map(subName=>{
-        const matchedSub=allSubjects.find(s=>s.name.toLowerCase().includes(subName.toLowerCase()));
-        return {
-          id: matchedSub?.id || subName,
-          name: subName,
-          teacherName: subName==='Physics'?'Alok Sir':subName==='Chemistry'?'Dr. Verma':subName==='Maths'?'R.K. Gupta':'Dr. Neha',
-          heldClasses: subName==='Physics'?14:subName==='Chemistry'?12:subName==='Maths'?11:4,
-          presentJoins: subName==='Physics'?11:subName==='Chemistry'?8:subName==='Maths'?9:2,
-          absentCount: subName==='Physics'?3:subName==='Chemistry'?4:subName==='Maths'?2:2,
-          rate: subName==='Physics'?79:subName==='Chemistry'?67:subName==='Maths'?82:50
-        };
-      });
-
-      // Live Class Feed
+      // 9. Live Class Feed
       const feedRes=await queryWithLimit(()=>pool.query(
-        `select j.id, s.name as student_name, coalesce(b.name,'ALPHA') as batch_name,
-                coalesce(sub.name,'Physics') as subject_name, coalesce(lc.title,'Online Live Class') as class_title,
+        `select j.id, s.name as student_name, coalesce(b.name, 'ALPHA') as batch_name,
+                coalesce(sub.name, 'Subject') as subject_name, coalesce(lc.title, 'Online Class') as class_title,
+                to_char(j.joined_at at time zone 'Asia/Kolkata', 'FMHH12:MI AM') as join_time_str,
+                to_char(j.joined_at at time zone 'Asia/Kolkata', 'Dy, DD Mon YYYY') as join_date_str,
                 j.joined_at, j.status
          from public.live_class_joins j
          join public.students s on s.id=j.student_key
          left join public.batches b on b.id=j.batch_id
          left join public.subjects sub on sub.id=j.subject_id
          left join public.live_classes lc on lc.id=j.class_id
-         order by j.joined_at desc limit 40`
+         where ($1='' or j.batch_id=$1)
+         order by j.joined_at desc limit 40`,[batchId]
       ));
       const liveClassFeed=(feedRes.rows||[]).map(r=>({
         id: r.id,
@@ -179,36 +229,64 @@ async function attendance(req,res,url,auth){
         batchName: `Batch ${String(r.batch_name).replace(/^batch\s+/i,'')}`,
         subjectName: r.subject_name,
         classTitle: r.class_title,
+        joinTimeStr: r.join_time_str,
+        joinDateStr: r.join_date_str,
         joinedAt: r.joined_at,
         status: r.status || 'Present'
       }));
 
-      // Batch Analytics
-      const batchesRes=await queryWithLimit(()=>pool.query(`select id,name from public.batches order by name`));
-      const batchAnalytics=(batchesRes.rows||[]).map(b=>({
-        id: b.id,
-        name: `Batch ${String(b.name).replace(/^batch\s+/i,'')}`,
-        studentCount: b.name.toLowerCase().includes('beta')?1:4,
-        classesHeld: b.name.toLowerCase().includes('beta')?10:31,
-        totalJoins: b.name.toLowerCase().includes('beta')?8:37,
-        rate: b.name.toLowerCase().includes('beta')?80:66
-      }));
+      // 10. Batch Analytics
+      const batchAnalyticsRes=await queryWithLimit(()=>pool.query(
+        `select b.id, b.name,
+           (select count(*)::int from public.students s where s.batch_id=b.id) as student_count,
+           (select count(*)::int from public.live_classes lc where lc.batch_id=b.id) as classes_held,
+           (select count(*)::int from public.live_class_joins j where j.batch_id=b.id and lower(coalesce(j.status,''))='present') as total_joins
+         from public.batches b
+         order by b.name`
+      ));
+      const batchAnalytics=(batchAnalyticsRes.rows||[]).map(b=>{
+        const totalPossibleBatch=(Number(b.student_count)||0) * (Number(b.classes_held)||0);
+        return {
+          id: b.id,
+          name: `Batch ${String(b.name).replace(/^batch\s+/i,'')}`,
+          studentCount: Number(b.student_count)||0,
+          classesHeld: Number(b.classes_held)||0,
+          totalJoins: Number(b.total_joins)||0,
+          rate: totalPossibleBatch > 0 ? Math.round((Number(b.total_joins)||0) * 100 / totalPossibleBatch) : 0
+        };
+      });
 
       return send(res,200,{
+        ok: true,
         kpi: { totalClasses, autoMarkedJoins, avgAttendanceRate, liveClassesToday },
         dayRegister: {
-          date: 'Sunday, 25 October 2026',
-          dateStr: date,
-          subjects: displaySubjects,
+          date: activeDateObj.full_label || activeDateStr,
+          dateStr: activeDateStr,
+          subjects: subjectColumns,
           rows: dayRegisterRows
         },
-        subjectMatrix,
+        availableDates,
+        availableBatches,
         liveClassFeed,
         batchAnalytics
       });
     }catch(error){
       safeLog(endpoint,'live-summary',error);
-      return send(res,500,{error:'Could not load attendance summary'});
+      return send(res,200,{
+        ok: false,
+        error: error.message || 'Could not load live attendance',
+        kpi: { totalClasses: 0, autoMarkedJoins: 0, avgAttendanceRate: 0, liveClassesToday: 0 },
+        dayRegister: {
+          date: 'No classes scheduled',
+          dateStr: dateParam || new Date().toISOString().slice(0,10),
+          subjects: [],
+          rows: []
+        },
+        availableDates: [],
+        availableBatches: [],
+        liveClassFeed: [],
+        batchAnalytics: []
+      });
     }
   }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { assignSubstitute, createHoliday, createLeaveBalance, createLeaveType, deleteLeaveRecord, deleteTimetableClass, getLiveAttendanceSummary, getLeaveLookups, getLeaveRequests, getRegularizations, getTimetable, reviewLeave, saveTeacherAvailability, saveTimetableClass, timetableLookups } from '../services/academicOperations';
 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
@@ -22,22 +22,23 @@ export default function AdminAcademicsPartAPage(){ const {pathname}=useLocation(
 
 
 function AttendancePage() {
-  const navigate = useNavigate();
   const [batch, setBatch] = useState('');
-  const [date, setDate] = useState('2026-10-25');
-  const [activeTab, setActiveTab] = useState<'design-1'|'design-2'|'design-3'|'design-4'|'design-5'>('design-4');
+  const [date, setDate] = useState('');
+  const [activeTab, setActiveTab] = useState<'day-register'|'feed'|'analytics'>('day-register');
   const [summaryData, setSummaryData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       const res = await getLiveAttendanceSummary(batch, date);
       setSummaryData(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load attendance summary');
+      if (!date && res?.dayRegister?.dateStr) {
+        setDate(res.dayRegister.dateStr);
+      }
+    } catch {
+      // Friendly fallback if network drops
+      setSummaryData(null);
     } finally {
       setLoading(false);
     }
@@ -48,89 +49,88 @@ function AttendancePage() {
   }, [load]);
 
   const kpis = summaryData?.kpi || {
-    totalClasses: 41,
-    autoMarkedJoins: 111,
-    avgAttendanceRate: 68,
-    liveClassesToday: 3,
+    totalClasses: 0,
+    autoMarkedJoins: 0,
+    avgAttendanceRate: 0,
+    liveClassesToday: 0,
   };
 
   const dayRegister = summaryData?.dayRegister || {
-    date: 'Sunday, 25 October 2026',
-    dateStr: '2026-10-25',
-    subjects: ['Physics', 'Chemistry', 'Maths', 'Biology'],
+    date: 'No classes scheduled',
+    dateStr: date || '2026-10-25',
+    subjects: ['PHYSICS', 'CHEMISTRY', 'MATHEMATICS'],
     rows: []
   };
 
-  const subjectMatrix = summaryData?.subjectMatrix || [
-    { id: '1', name: 'Physics', teacherName: 'Alok Sir', heldClasses: 14, presentJoins: 11, absentCount: 3, rate: 79 },
-    { id: '2', name: 'Chemistry', teacherName: 'Dr. Verma', heldClasses: 12, presentJoins: 8, absentCount: 4, rate: 67 },
-    { id: '3', name: 'Maths', teacherName: 'R.K. Gupta', heldClasses: 11, presentJoins: 9, absentCount: 2, rate: 82 },
-    { id: '4', name: 'Biology', teacherName: 'Dr. Neha', heldClasses: 4, presentJoins: 2, absentCount: 2, rate: 50 },
+  const availableDates: Array<{ date_str: string; label: string; full_label: string }> = summaryData?.availableDates || [
+    { date_str: '2026-10-25', label: 'Sun, 25 Oct 2026', full_label: 'Sunday, 25 October 2026' },
+    { date_str: '2026-10-24', label: 'Sat, 24 Oct 2026', full_label: 'Saturday, 24 October 2026' },
+    { date_str: '2026-10-23', label: 'Fri, 23 Oct 2026', full_label: 'Friday, 23 October 2026' },
+    { date_str: '2026-10-22', label: 'Thu, 22 Oct 2026', full_label: 'Thursday, 22 October 2026' },
+    { date_str: '2026-10-21', label: 'Wed, 21 Oct 2026', full_label: 'Wednesday, 21 October 2026' },
+  ];
+
+  const availableBatches: Array<{ id: string; name: string }> = summaryData?.availableBatches || [
+    { id: 'e99885bc-17f1-4a0a-bf77-e7fb1cee36df', name: 'ALPHA' },
+    { id: '03ac497f-f981-4926-bec9-f5680823631a', name: 'BETA' },
   ];
 
   const liveClassFeed = summaryData?.liveClassFeed || [];
-  const batchAnalytics = summaryData?.batchAnalytics || [
-    { id: 'alpha', name: 'Batch ALPHA', studentCount: 4, classesHeld: 31, totalJoins: 37, rate: 66 },
-    { id: 'beta', name: 'Batch BETA', studentCount: 1, classesHeld: 10, totalJoins: 8, rate: 80 },
-  ];
+  const batchAnalytics = summaryData?.batchAnalytics || [];
+
+  const todayDateFormatted = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
 
   return (
-    <div className="space-y-6 rounded-3xl bg-[#1c140e] p-6 text-white shadow-xl min-h-[85vh]">
-      {loading && <div className="text-xs text-orange-400 animate-pulse font-semibold">Updating live attendance data...</div>}
-      {error && <div className="text-xs text-rose-400 font-semibold">{error}</div>}
-      {/* Top Header */}
+    <div className="space-y-6">
+      {/* 1. Header: Attendance + Subtitle + All Batches Dropdown */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white">Attendance</h1>
-          <p className="mt-1 text-sm text-slate-300">
-            Zoom join par automatic mark &bull; sirf dekhne aur analysis ke liye
+          <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white">
+            Attendance
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Marked automatically when students join live classes. View and analysis only.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-3">
           <select
             value={batch}
-            onChange={(e) => setBatch(e.target.value)}
-            className="rounded-xl border border-slate-700 bg-[#2b1f16] px-4 py-2.5 text-sm font-semibold text-white outline-none hover:border-orange-500 focus:border-orange-500"
+            onChange={(e) => {
+              setBatch(e.target.value);
+            }}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm outline-none transition hover:border-orange-500 focus:border-orange-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
           >
             <option value="">All Batches</option>
-            <option value="e99885bc-17f1-4a0a-bf77-e7fb1cee36df">Batch ALPHA</option>
-            <option value="03ac497f-f981-4926-bec9-f5680823631a">Batch BETA</option>
+            {availableBatches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name.startsWith('Batch') ? b.name : `Batch ${b.name}`}
+              </option>
+            ))}
           </select>
-          <a
-            href="/student"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-bold text-white shadow-md hover:bg-orange-600 transition"
-          >
-            Student Portal Demo
-          </a>
         </div>
       </div>
 
-      {/* Design Pills / Tabs */}
+      {/* 2. Tabs: Pill shape (Day Register [active], Live Class Feed, Batch Analytics) */}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {[
-          { key: 'design-1', label: 'Design 1: Subject Matrix' },
-          { key: 'design-2', label: 'Design 2: Live Class Feed' },
-          { key: 'design-3', label: 'Design 3: Batch Analytics' },
-          { key: 'design-4', label: 'Design 4: Day Register' },
-          { key: 'design-5', label: 'Design 5: Students and Detail' },
+          { key: 'day-register' as const, label: 'Day Register' },
+          { key: 'feed' as const, label: 'Live Class Feed' },
+          { key: 'analytics' as const, label: 'Batch Analytics' },
         ].map((tab) => {
           const isActive = activeTab === tab.key;
           return (
             <button
               key={tab.key}
-              onClick={() => {
-                if (tab.key === 'design-5') {
-                  navigate('/admin/students');
-                } else {
-                  setActiveTab(tab.key as any);
-                }
-              }}
+              onClick={() => setActiveTab(tab.key)}
               className={`rounded-full px-5 py-2 text-xs font-bold transition ${
                 isActive
-                  ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20'
-                  : 'bg-[#2b1f16] text-slate-300 hover:bg-[#38281d] hover:text-white border border-slate-850'
+                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/25'
+                  : 'border border-slate-200 bg-white text-slate-600 hover:border-orange-300 hover:bg-orange-50/50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
               }`}
             >
               {tab.label}
@@ -139,256 +139,272 @@ function AttendancePage() {
         })}
       </div>
 
-      {/* Sub-bar / Legend Card */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-[#251a13] px-6 py-4">
-        <div className="font-bold text-white text-sm">
-          Aaj: Sunday, 25 October 2026
+      {/* 3. Legend Card */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-orange-100 bg-gradient-to-r from-orange-50/70 to-amber-50/50 px-6 py-4 shadow-sm dark:border-slate-800 dark:from-slate-900 dark:to-slate-900">
+        <div className="text-sm font-bold text-slate-800 dark:text-white">
+          Today: {todayDateFormatted}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-800/80 bg-emerald-950/70 px-3.5 py-1.5 font-bold text-emerald-400">
-            Present = class join kiya
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-100/90 px-3.5 py-1.5 font-bold text-emerald-800 dark:border-emerald-800/80 dark:bg-emerald-950/70 dark:text-emerald-400">
+            Present: joined the class
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-900/80 bg-rose-950/70 px-3.5 py-1.5 font-bold text-rose-400">
-            Absent = class thi par join nahi kiya
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-rose-100/90 px-3.5 py-1.5 font-bold text-rose-800 dark:border-rose-900/80 dark:bg-rose-950/70 dark:text-rose-400">
+            Absent: class held, did not join
           </span>
           <span
-            className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 px-3.5 py-1.5 font-semibold text-slate-400"
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3.5 py-1.5 font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
             style={{
               backgroundImage:
-                'repeating-linear-gradient(45deg, rgba(255,255,255,0.06), rgba(255,255,255,0.06) 6px, transparent 6px, transparent 12px)',
+                'repeating-linear-gradient(45deg, rgba(148,163,184,0.15), rgba(148,163,184,0.15) 6px, transparent 6px, transparent 12px)',
             }}
           >
-            Not enrolled = student ne ye subject liya hi nahi
+            Not enrolled: student has not taken this subject
           </span>
         </div>
       </div>
 
-      {/* 4 KPI Cards */}
+      {/* 4. 4 KPI Cards (White card, Big Orange number, Small uppercase label) */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
           <div className="text-4xl font-black text-orange-500">{kpis.totalClasses}</div>
-          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-            Total classes
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            TOTAL CLASSES
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
           <div className="text-4xl font-black text-orange-500">{kpis.autoMarkedJoins}</div>
-          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-            Auto-marked joins
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            AUTO-MARKED JOINS
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
           <div className="text-4xl font-black text-orange-500">{kpis.avgAttendanceRate}%</div>
-          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-            Average attendance
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            AVERAGE ATTENDANCE
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-800/80 bg-[#251a13] p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
           <div className="text-4xl font-black text-orange-500">{kpis.liveClassesToday}</div>
-          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-            Live classes aaj
+          <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            LIVE CLASSES TODAY
           </div>
         </div>
       </div>
 
-      {/* Tab Content */}
-      {activeTab === 'design-4' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
-          {/* Card Header with Date Picker */}
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-4">
-            <h2 className="text-base font-bold text-white">
+      {/* 5. Day Register Tab */}
+      {activeTab === 'day-register' && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          {/* Header Strip with Date Picker */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-orange-100 bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-4 dark:border-slate-800 dark:from-slate-800 dark:to-slate-800">
+            <h2 className="text-base font-extrabold text-orange-950 dark:text-orange-300">
               Day Register: {dayRegister.date}
             </h2>
             <select
-              value={date}
+              value={date || dayRegister.dateStr || ''}
               onChange={(e) => setDate(e.target.value)}
-              className="rounded-xl border border-slate-700 bg-[#2b1f16] px-3.5 py-1.5 text-xs font-bold text-white outline-none hover:border-orange-500"
+              className="rounded-xl border border-orange-200 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 shadow-sm outline-none transition hover:border-orange-500 focus:border-orange-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              <option value="2026-10-25">Sun, 25 Oct 2026</option>
-              <option value="2026-10-24">Sat, 24 Oct 2026</option>
-              <option value="2026-10-23">Fri, 23 Oct 2026</option>
-              <option value="2026-10-22">Thu, 22 Oct 2026</option>
-              <option value="2026-10-21">Wed, 21 Oct 2026</option>
-              <option value="2026-10-20">Tue, 20 Oct 2026</option>
+              {availableDates.map((d) => (
+                <option key={d.date_str} value={d.date_str}>
+                  {d.label}
+                </option>
+              ))}
             </select>
           </div>
 
-          {/* Day Register Table */}
+          {/* Table Container */}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-left text-sm">
-              <thead className="bg-[#1e150f] text-xs font-bold text-slate-400 border-b border-slate-800">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50/80 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/80 dark:text-slate-400">
                 <tr>
-                  <th className="px-6 py-4">Student</th>
+                  <th className="px-6 py-3.5">STUDENT</th>
                   {dayRegister.subjects.map((sub: string) => (
-                    <th key={sub} className="px-6 py-4 text-center">
+                    <th key={sub} className="px-6 py-3.5 text-center">
                       {sub}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {dayRegister.rows.map((row: any) => (
-                  <tr key={row.studentId} className="hover:bg-slate-900/30 transition">
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-white">{row.name}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{row.batchName}</div>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {dayRegister.rows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={dayRegister.subjects.length + 1}
+                      className="p-12 text-center text-sm font-semibold text-slate-500 dark:text-slate-400"
+                    >
+                      {loading ? 'Loading attendance data…' : 'No classes on this date yet.'}
                     </td>
-                    {dayRegister.subjects.map((sub: string) => {
-                      const item = row.subjects?.[sub] || { status: 'Not enrolled' };
-                      if (item.status === 'Present') {
-                        return (
-                          <td key={sub} className="px-6 py-4 text-center">
-                            <span className="inline-block rounded-full border border-emerald-700/60 bg-emerald-950/80 px-3.5 py-1 text-xs font-bold text-emerald-400">
-                              Present
-                            </span>
-                            <span className="block text-[11px] text-slate-400 mt-1">
-                              {item.joinTime || 'joined class'}
-                            </span>
-                          </td>
-                        );
-                      }
-                      if (item.status === 'Absent') {
-                        return (
-                          <td key={sub} className="px-6 py-4 text-center">
-                            <span className="inline-block rounded-full border border-rose-800/60 bg-rose-950/80 px-3.5 py-1 text-xs font-bold text-rose-400">
-                              Absent
-                            </span>
-                            <span className="block text-[11px] text-slate-400 mt-1">
-                              {item.classTime || 'class 10:30 AM'}
-                            </span>
-                          </td>
-                        );
-                      }
-                      return (
-                        <td key={sub} className="px-4 py-3 text-center">
-                          <div
-                            className="h-12 w-full rounded-xl flex items-center justify-center text-xs font-semibold text-slate-400/70 border border-slate-800/50"
-                            style={{
-                              backgroundImage:
-                                'repeating-linear-gradient(45deg, rgba(255,255,255,0.04), rgba(255,255,255,0.04) 8px, transparent 8px, transparent 16px)',
-                            }}
-                          >
-                            Not enrolled
-                          </div>
-                        </td>
-                      );
-                    })}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {/* Tab 1: Subject Matrix */}
-      {activeTab === 'design-1' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
-          <div className="border-b border-slate-800 px-6 py-4">
-            <h2 className="text-base font-bold text-white">Subject-wise Attendance Matrix</h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[#1e150f] text-xs font-bold text-slate-400 border-b border-slate-800">
-                <tr>
-                  <th className="px-6 py-3.5">Subject</th>
-                  <th className="px-6 py-3.5">Teacher</th>
-                  <th className="px-6 py-3.5 text-center">Classes Held</th>
-                  <th className="px-6 py-3.5 text-center">Present Joins</th>
-                  <th className="px-6 py-3.5 text-center">Absent</th>
-                  <th className="px-6 py-3.5">Attendance Rate</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {subjectMatrix.map((sub: any) => (
-                  <tr key={sub.id} className="hover:bg-slate-900/30 transition">
-                    <td className="px-6 py-4 font-bold text-white">{sub.name}</td>
-                    <td className="px-6 py-4 text-slate-300">{sub.teacherName}</td>
-                    <td className="px-6 py-4 text-center font-semibold">{sub.heldClasses}</td>
-                    <td className="px-6 py-4 text-center font-semibold text-emerald-400">{sub.presentJoins}</td>
-                    <td className="px-6 py-4 text-center font-semibold text-rose-400">{sub.absentCount}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-2 w-32 rounded-full bg-slate-800 overflow-hidden">
-                          <div className="h-full bg-orange-500 rounded-full" style={{ width: `${sub.rate}%` }} />
+                ) : (
+                  dayRegister.rows.map((row: any) => (
+                    <tr
+                      key={row.studentId}
+                      className="transition hover:bg-slate-50/70 dark:hover:bg-slate-800/50"
+                    >
+                      <td className="px-6 py-4">
+                        <div className="font-extrabold text-slate-900 dark:text-white">
+                          {row.name}
                         </div>
-                        <span className="font-bold text-orange-400">{sub.rate}%</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        <div className="mt-0.5 text-xs font-medium text-slate-400 dark:text-slate-500">
+                          {row.batchName}
+                        </div>
+                      </td>
+                      {dayRegister.subjects.map((sub: string) => {
+                        const cell = row.subjects?.[sub] || { status: 'Not enrolled' };
+                        if (cell.status === 'Present') {
+                          return (
+                            <td key={sub} className="px-6 py-4 text-center">
+                              <span className="inline-block rounded-full bg-emerald-100 px-3.5 py-1 text-xs font-bold text-emerald-700 dark:border dark:border-emerald-800/60 dark:bg-emerald-950/80 dark:text-emerald-400">
+                                Present
+                              </span>
+                              <span className="mt-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                                {cell.joinTime || 'Joined class'}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (cell.status === 'Absent') {
+                          return (
+                            <td key={sub} className="px-6 py-4 text-center">
+                              <span className="inline-block rounded-full bg-rose-100 px-3.5 py-1 text-xs font-bold text-rose-700 dark:border dark:border-rose-800/60 dark:bg-rose-950/80 dark:text-rose-400">
+                                Absent
+                              </span>
+                              <span className="mt-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                                {cell.classTime || 'Class held'}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (cell.status === 'No class this day') {
+                          return (
+                            <td key={sub} className="px-6 py-4 text-center">
+                              <span className="text-xs font-medium text-slate-400 dark:text-slate-500">
+                                No class this day
+                              </span>
+                            </td>
+                          );
+                        }
+                        return (
+                          <td key={sub} className="px-4 py-3 text-center">
+                            <div
+                              className="mx-auto flex h-11 w-32 items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs font-semibold text-slate-400 dark:border-slate-700/60 dark:text-slate-500"
+                              style={{
+                                backgroundImage:
+                                  'repeating-linear-gradient(45deg, rgba(148,163,184,0.1), rgba(148,163,184,0.1) 6px, transparent 6px, transparent 12px)',
+                              }}
+                            >
+                              Not enrolled
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         </section>
       )}
 
-      {/* Tab 2: Live Class Feed */}
-      {activeTab === 'design-2' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#251a13] shadow-md">
-          <div className="border-b border-slate-800 px-6 py-4">
-            <h2 className="text-base font-bold text-white">Live Class Zoom Feed (Auto-Joins)</h2>
+      {/* 6. Live Class Feed Tab */}
+      {activeTab === 'feed' && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="border-b border-orange-100 bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-4 dark:border-slate-800 dark:from-slate-800 dark:to-slate-800">
+            <h2 className="text-base font-extrabold text-orange-950 dark:text-orange-300">
+              Live Class Feed (Auto-Joins)
+            </h2>
           </div>
-          <div className="divide-y divide-slate-800/80 max-h-[500px] overflow-y-auto">
+          <div className="max-h-[520px] divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
             {liveClassFeed.length ? (
-              liveClassFeed.map((feed: any) => (
-                <div key={feed.id} className="flex items-center justify-between p-4 px-6 hover:bg-slate-900/30 transition">
+              liveClassFeed.map((item: any) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between p-4 px-6 transition hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+                >
                   <div className="flex items-center gap-3">
-                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-500/20 text-orange-400 font-bold text-xs">
-                      {feed.studentName?.slice(0, 2).toUpperCase()}
+                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-100 text-xs font-bold text-orange-700 dark:bg-orange-950/60 dark:text-orange-400">
+                      {(item.studentName || 'ST').slice(0, 2).toUpperCase()}
                     </span>
                     <div>
-                      <div className="font-bold text-white">{feed.studentName}</div>
-                      <div className="text-xs text-slate-400">
-                        {feed.batchName} &bull; {feed.subjectName} &bull; {feed.classTitle}
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {item.studentName}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {item.batchName} &bull; {item.subjectName} &bull; {item.classTitle}
                       </div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <span className="inline-block rounded-full bg-emerald-950/80 border border-emerald-700/60 px-3 py-1 text-xs font-bold text-emerald-400">
+                    <span className="inline-block rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700 dark:border dark:border-emerald-800/60 dark:bg-emerald-950/80 dark:text-emerald-400">
                       ✓ Joined
                     </span>
-                    <span className="block text-[11px] text-slate-400 mt-1">
-                      {feed.joinedAt ? new Date(feed.joinedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : ''}
+                    <span className="mt-1 block text-[11px] text-slate-400 dark:text-slate-500">
+                      {item.joinTimeStr ? `${item.joinDateStr || ''} ${item.joinTimeStr}` : ''}
                     </span>
                   </div>
                 </div>
               ))
             ) : (
-              <div className="p-8 text-center text-sm text-slate-400">No joins recorded today yet.</div>
+              <div className="p-12 text-center text-sm font-semibold text-slate-500 dark:text-slate-400">
+                No live class joins recorded yet. When students join live classes from the Student Portal, their attendance joins will appear here in real time.
+              </div>
             )}
           </div>
         </section>
       )}
 
-      {/* Tab 3: Batch Analytics */}
-      {activeTab === 'design-3' && (
+      {/* 7. Batch Analytics Tab */}
+      {activeTab === 'analytics' && (
         <section className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            {batchAnalytics.map((b: any) => (
-              <div key={b.id} className="rounded-2xl border border-slate-800 bg-[#251a13] p-6 shadow-md">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-black text-white">{b.name}</h3>
-                  <span className="rounded-full bg-orange-500/20 border border-orange-500/30 px-3 py-1 text-xs font-bold text-orange-400">
-                    {b.studentCount} Students
-                  </span>
-                </div>
-                <div className="mt-5 grid grid-cols-3 gap-3 text-center border-t border-slate-800/80 pt-4">
-                  <div>
-                    <div className="text-2xl font-bold text-white">{b.classesHeld}</div>
-                    <div className="text-[11px] text-slate-400 mt-1">Classes Held</div>
-                  </div>
-                  <div>
-                    <div className="text-2xl font-bold text-emerald-400">{b.totalJoins}</div>
-                    <div className="text-[11px] text-slate-400 mt-1">Total Joins</div>
-                  </div>
-                  <div>
-                    <div className="text-2xl font-bold text-orange-500">{b.rate}%</div>
-                    <div className="text-[11px] text-slate-400 mt-1">Attendance</div>
-                  </div>
-                </div>
+            {batchAnalytics.length === 0 ? (
+              <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-12 text-center text-sm font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+                No batch analytics available yet.
               </div>
-            ))}
+            ) : (
+              batchAnalytics.map((b: any) => (
+                <div
+                  key={b.id}
+                  className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-black text-slate-900 dark:text-white">
+                      {b.name}
+                    </h3>
+                    <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700 dark:border-orange-900/40 dark:bg-orange-950/40 dark:text-orange-400">
+                      {b.studentCount} Students
+                    </span>
+                  </div>
+                  <div className="mt-5 grid grid-cols-3 gap-3 border-t border-slate-100 pt-4 text-center dark:border-slate-800">
+                    <div>
+                      <div className="text-2xl font-black text-slate-900 dark:text-white">
+                        {b.classesHeld}
+                      </div>
+                      <div className="mt-1 text-[11px] font-bold text-slate-400 dark:text-slate-500">
+                        Classes Held
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                        {b.totalJoins}
+                      </div>
+                      <div className="mt-1 text-[11px] font-bold text-slate-400 dark:text-slate-500">
+                        Total Joins
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-black text-orange-500">
+                        {b.rate}%
+                      </div>
+                      <div className="mt-1 text-[11px] font-bold text-slate-400 dark:text-slate-500">
+                        Attendance
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </section>
       )}
