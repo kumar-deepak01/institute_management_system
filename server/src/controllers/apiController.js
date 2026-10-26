@@ -106,6 +106,14 @@ const normalizeEmail = value => String(value || '').trim().toLowerCase();
 
 async function loadAccounts() {
   accounts = (await sheetsStore.getSheetRecords('Students')).filter(item => item._type === 'account');
+  if (accounts.length === 0) {
+    try {
+      const { rows } = await getPool().query('select record_json from public.accounts');
+      if (rows && rows.length > 0) {
+        accounts = rows.map(r => r.record_json).filter(Boolean);
+      }
+    } catch (_) {}
+  }
 }
 async function saveAccounts(next) {
   const current = await sheetsStore.getSheetRecords('Students');
