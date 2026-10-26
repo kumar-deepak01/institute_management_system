@@ -105,6 +105,9 @@ async function markPayrollReview(client, staffId, effectiveDate, reason) {
 const payrollStaffSql = `select s.id,s.staff_key,s.employee_id,s.name,s.email,s.role,s.staff_type,s.status,s.employment_type,
   s.monthly_salary,s.base_salary,s.per_class_rate,s.hourly_rate,s.pf_percent,s.tds_percent,
   coalesce(sp.account_holder_name,'') account_holder_name,coalesce(sp.bank_name,'') bank_name,coalesce(sp.bank_account_number,'') bank_account_number,coalesce(sp.ifsc_code,'') ifsc_code,coalesce(sp.branch,'') branch,coalesce(sp.upi_id,'') upi_id,coalesce(sp.payment_mode,'both') payment_mode,
+  coalesce(py.payroll_id, '') payroll_id, coalesce(py.payroll_status, '') payroll_status, py.paid_at, py.saved_gross_pay, py.saved_deductions, py.saved_net_pay, py.saved_breakdown, py.saved_snapshot,
+  py.payment_id, coalesce(py.receipt_no, '') receipt_no, coalesce(py.payment_method, '') payment_method, coalesce(py.transaction_id, '') transaction_id, py.payment_date, py.payment_amount, coalesce(py.payment_remarks, '') payment_remarks, coalesce(py.paid_by, '') paid_by,
+  coalesce(py.paid_holder, '') paid_holder, coalesce(py.paid_bank, '') paid_bank, coalesce(py.paid_account_masked, '') paid_account_masked, coalesce(py.paid_ifsc, '') paid_ifsc, coalesce(py.paid_branch, '') paid_branch, coalesce(py.paid_upi, '') paid_upi,
   coalesce(ch.compensation_model,case when lower(coalesce(s.employment_type,'')) like '%hourly%' then 'hourly' when lower(coalesce(s.employment_type,'')) like '%contract%' then 'per_class' when lower(coalesce(s.employment_type,'')) like '%hybrid%' or lower(coalesce(s.employment_type,'')) like '%part-time%' then 'hybrid' else 'monthly' end) compensation_model,
   coalesce(ch.monthly_rate,s.monthly_salary,s.base_salary,0)::numeric monthly_rate,
   coalesce(ch.hourly_rate,s.hourly_rate,0)::numeric effective_hourly_rate,
@@ -143,6 +146,15 @@ left join lateral (
       and not exists(select 1 from public.payroll_work_records existing where existing.staff_id=s.id and existing.record_kind='attendance' and existing.status='approved' and existing.work_date=days.day::date)
   ) day_row
 ) lv on true
+left join lateral (
+  select p.id as payroll_id, p.status as payroll_status, p.paid_at, p.gross_pay as saved_gross_pay, p.deductions as saved_deductions, p.net_pay as saved_net_pay, p.breakdown_json as saved_breakdown, p.snapshot_json as saved_snapshot,
+         pp.id as payment_id, pp.receipt_no, pp.payment_method, pp.transaction_id, pp.payment_date, pp.amount as payment_amount, pp.remarks as payment_remarks, pp.paid_by,
+         pp.account_holder_name as paid_holder, pp.bank_name as paid_bank, pp.account_number_masked as paid_account_masked, pp.ifsc_code as paid_ifsc, pp.branch as paid_branch, pp.upi_id as paid_upi
+  from public.payroll p
+  left join public.payroll_payments pp on pp.payroll_id=p.id and pp.status='completed'
+  where p.employee_key=s.id and p.period_start=$1::date and p.period_end=$2::date
+  order by p.created_at desc limit 1
+) py on true
 where lower(coalesce(s.status,'active')) not in ('inactive','left','terminated','archived')
 order by lower(coalesce(s.name,'')),s.id`;
 
@@ -195,12 +207,33 @@ function staffView(row, period, workdays) {
     branch: row.branch || '',
     upiId: row.upi_id || ''
   };
-  return { id: row.id, staffKey: row.staff_key, employeeId: row.employee_id || '', name: row.name || '', email: row.email || '', role: row.role || row.staff_type || 'Staff', employmentType: row.employment_type || '', model: row.compensation_model, profileSet,
+  const isGenerated = Boolean(row.payroll_id);
+  const payrollStatus = row.payroll_status || 'not_generated';
+  const isPaid = payrollStatus === 'settled';
+  const payment = (isPaid || row.receipt_no) ? {
+    paymentId: row.payment_id || null,
+    receiptNo: row.receipt_no || '',
+    paymentMethod: row.payment_method || 'Bank Transfer',
+    transactionId: row.transaction_id || '',
+    paymentDate: row.payment_date ? String(row.payment_date).slice(0, 10) : (row.paid_at ? String(row.paid_at).slice(0, 10) : ''),
+    amount: Number(row.payment_amount || row.saved_net_pay || preview.netPay || 0),
+    remarks: row.payment_remarks || '',
+    paidBy: row.paid_by || '',
+    accountHolderName: row.paid_holder || paymentDetails.accountHolderName,
+    bankName: row.paid_bank || paymentDetails.bankName,
+    accountMasked: row.paid_account_masked || (paymentDetails.bankAccountNumber ? `•••• •••• ${paymentDetails.bankAccountNumber.slice(-4)}` : ''),
+    ifscCode: row.paid_ifsc || paymentDetails.ifscCode,
+    branch: row.paid_branch || paymentDetails.branch,
+    upiId: row.paid_upi || paymentDetails.upiId,
+  } : null;
+
+  return { id: row.id, payrollId: row.payroll_id || null, staffKey: row.staff_key, employeeId: row.employee_id || '', name: row.name || '', email: row.email || '', role: row.role || row.staff_type || 'Staff', employmentType: row.employment_type || '', model: row.compensation_model, profileSet,
     monthlyRate: Number(row.monthly_rate || 0), hourlyRate: Number(row.effective_hourly_rate || 0), classRate: Number(row.class_rate || 0), teachingHourRate: Number(row.teaching_hour_rate || 0), allowance: Number(row.allowance || 0),
     presentDays: Number(row.present_days || 0), absentDays: Number(row.absent_days || 0), paidLeaveDays: Number(row.paid_leave_days || 0), unpaidLeaveDays: Number(row.unpaid_leave_days || 0), recordedAttendanceDays: dayCount,
     attendancePercent: dayCount ? Math.round(Number(row.present_days || 0) * 100 / dayCount) : null,
     approvedMinutes: Number(row.approved_minutes || 0), payableHours: Number(row.approved_minutes || 0) / 60, approvedClasses: Number(row.approved_classes || 0), pendingWorkRecords: Number(row.pending_records || 0),
-    hasPaymentDetails, paymentDetails, ...preview, period: period.key };
+    hasPaymentDetails, paymentDetails, isGenerated, payrollStatus, isPaid, paidAt: row.paid_at ? String(row.paid_at).slice(0, 10) : null, payment,
+    ...preview, period: period.key };
 }
 async function adjustmentsByStaff(period, executor = getPool()) {
   const { rows } = await executor.query(`select staff_id,kind,label,amount,reason,id from public.payroll_adjustments where period_start=$1::date and period_end=$2::date and status='approved' and payroll_id is null order by staff_id,created_at,id`, [period.start, period.end]);
@@ -761,6 +794,198 @@ async function handlePayrollRoute(req, res, url) {
       if (!staff.rows[0]) return send(res, 404, { error: 'Staff member not found.' });
       const payrollHistory = results[0].rows.map(row => ({ id: row.id, periodStart: row.period_start ? String(row.period_start).slice(0, 10) : null, periodEnd: row.period_end ? String(row.period_end).slice(0, 10) : null, status: row.status, grossPay: Number(row.gross_pay ?? row.amount ?? 0), deductions: Number(row.deductions || 0), netPay: Number(row.net_pay ?? row.amount ?? 0), attendanceDays: Number(row.attendance_days || 0), payableHours: Number(row.payable_hours || 0), breakdown: row.breakdown_json || {}, snapshot: row.snapshot_json || {}, paymentDate: row.paid_at || row.record_json?.paidAt || null }));
       return send(res, 200, { staff: staff.rows[0], payrollHistory, workRecords: results[1].rows.map(row => ({ id: row.id, date: String(row.work_date).slice(0, 10), kind: row.record_kind, source: row.source, verificationStatus: row.verification_status, status: row.status, minutes: row.minutes, payableMinutes: row.payable_minutes, record_json: row.record_json || {}, ...row.record_json })), compensationHistory: results[2].rows.map(row => ({ id: row.id, model: row.compensation_model, monthlyRate: Number(row.monthly_rate), hourlyRate: Number(row.hourly_rate), classRate: Number(row.class_rate), teachingHourRate: Number(row.teaching_hour_rate), allowance: Number(row.allowance), effectiveFrom: String(row.effective_from).slice(0, 10), effectiveTo: row.effective_to ? String(row.effective_to).slice(0, 10) : null, attendancePolicy: row.attendance_policy, reason: row.reason })), adjustments: results[3].rows.map(row => ({ id: row.id, periodStart: String(row.period_start).slice(0,10), periodEnd: String(row.period_end).slice(0,10), kind: row.kind, label: row.label, amount: Number(row.amount), reason: row.reason, status: row.status, approvedAt: row.approved_at })) });
+    }
+    if (req.method === 'POST' && pathname === '/api/admin/payroll/pay') {
+      const data = await input(req, res, auth); if (!data) return;
+      const staffId = clean(data.staffId, 80);
+      const paymentMethod = clean(data.paymentMethod, 30) || 'Bank Transfer';
+      const transactionId = clean(data.transactionId, 120);
+      const paymentDate = dateOk(data.paymentDate) ? data.paymentDate : new Date().toISOString().slice(0, 10);
+      const remarks = clean(data.remarks, 500);
+
+      if (!staffId) return send(res, 400, { error: 'Staff ID is required.' });
+      if (!transactionId) return send(res, 400, { error: 'Transaction / Reference number (UTR) is required.' });
+      if (!['bank transfer', 'upi'].includes(paymentMethod.toLowerCase())) {
+        return send(res, 400, { error: 'Payment method must be either Bank Transfer or UPI.' });
+      }
+
+      const client = await getPool().connect();
+      try {
+        await client.query('begin');
+
+        const staffResult = await client.query(`
+          select s.*, sp.account_holder_name, sp.bank_name, sp.bank_account_number, sp.ifsc_code, sp.branch, sp.upi_id, sp.payment_mode
+          from public.staff s
+          left join public.staff_private sp on sp.staff_id=s.id
+          where s.id=$1
+        `, [staffId]);
+        const staffRow = staffResult.rows[0];
+        if (!staffRow) {
+          await client.query('rollback');
+          return send(res, 404, { error: 'Staff member was not found.' });
+        }
+
+        const payrollResult = await client.query(`
+          select p.*, r.status as run_status
+          from public.payroll p
+          left join public.payroll_runs r on r.id=p.payroll_run_id
+          where p.employee_key=$1 and p.period_start=$2::date and p.period_end=$3::date
+          order by p.created_at desc limit 1
+          for update
+        `, [staffId, period.start, period.end]);
+        const payrollRow = payrollResult.rows[0];
+        if (!payrollRow) {
+          await client.query('rollback');
+          return send(res, 400, { error: 'Payroll has not been generated for this staff member yet. Please click "Run Payroll" to generate it first.' });
+        }
+
+        if (payrollRow.status === 'settled') {
+          await client.query('rollback');
+          return send(res, 409, { error: 'This payroll has already been settled and paid.' });
+        }
+
+        const priorPayment = await client.query('select id, receipt_no from public.payroll_payments where payroll_id=$1 and status=\'completed\'', [payrollRow.id]);
+        if (priorPayment.rowCount) {
+          await client.query('rollback');
+          return send(res, 409, { error: `Payment has already been recorded for this payroll (Receipt: ${priorPayment.rows[0].receipt_no}).` });
+        }
+
+        const newAccountHolder = clean(data.accountHolderName, 120);
+        const newBankName = clean(data.bankName, 120);
+        const newAccountNo = clean(data.bankAccountNumber, 50).replace(/\s/g, '');
+        const newIfsc = clean(data.ifscCode, 30).toUpperCase().trim();
+        const newBranch = clean(data.branch, 120);
+        const newUpiId = clean(data.upiId, 120).trim();
+
+        if (newAccountNo || newUpiId || newBankName) {
+          await client.query(`
+            insert into public.staff_private (staff_id, account_holder_name, bank_name, bank_account_number, ifsc_code, branch, upi_id, updated_at)
+            values ($1, coalesce(nullif($2,''), $3), coalesce(nullif($4,''), $5), coalesce(nullif($6,''), $7), coalesce(nullif($8,''), $9), coalesce(nullif($10,''), $11), coalesce(nullif($12,''), $13), now())
+            on conflict (staff_id) do update set
+              account_holder_name = coalesce(nullif($2,''), staff_private.account_holder_name),
+              bank_name = coalesce(nullif($4,''), staff_private.bank_name),
+              bank_account_number = coalesce(nullif($6,''), staff_private.bank_account_number),
+              ifsc_code = coalesce(nullif($8,''), staff_private.ifsc_code),
+              branch = coalesce(nullif($10,''), staff_private.branch),
+              upi_id = coalesce(nullif($12,''), staff_private.upi_id),
+              updated_at = now()
+          `, [
+            staffId,
+            newAccountHolder, staffRow.account_holder_name || '',
+            newBankName, staffRow.bank_name || '',
+            newAccountNo, staffRow.bank_account_number || '',
+            newIfsc, staffRow.ifsc_code || '',
+            newBranch, staffRow.branch || '',
+            newUpiId, staffRow.upi_id || ''
+          ]);
+        }
+
+        const effectiveHolder = newAccountHolder || staffRow.account_holder_name || staffRow.name;
+        const effectiveBank = newBankName || staffRow.bank_name || '';
+        const rawAccount = newAccountNo || staffRow.bank_account_number || '';
+        const accountMasked = rawAccount ? (rawAccount.length > 4 ? `•••• •••• ${rawAccount.slice(-4)}` : rawAccount) : '';
+        const effectiveIfsc = (newIfsc || staffRow.ifsc_code || '').toUpperCase();
+        const effectiveBranch = newBranch || staffRow.branch || '';
+        const effectiveUpi = newUpiId || staffRow.upi_id || '';
+
+        const netAmount = Number(payrollRow.net_pay || payrollRow.amount || 0);
+        const paymentId = id();
+        const receiptNo = `MJM-SAL-${new Date().getFullYear()}${(new Date().getMonth()+1).toString().padStart(2, '0')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        const paidBy = auth.account.email || auth.account.name || 'Institute Admin';
+
+        const paymentRecord = {
+          id: paymentId,
+          receiptNo,
+          paymentMethod: paymentMethod.toLowerCase() === 'upi' ? 'UPI' : 'Bank Transfer',
+          paymentDate,
+          amount: netAmount,
+          transactionId,
+          accountHolderName: effectiveHolder,
+          bankName: effectiveBank,
+          accountMasked,
+          ifscCode: effectiveIfsc,
+          branch: effectiveBranch,
+          upiId: effectiveUpi,
+          remarks,
+          paidBy,
+          timestamp: new Date().toISOString()
+        };
+
+        await client.query(`
+          insert into public.payroll_payments (
+            id, payroll_id, payroll_run_id, receipt_no, staff_id, staff_name, employee_id,
+            payment_method, payment_date, amount, transaction_id, account_holder_name,
+            bank_name, account_number_masked, ifsc_code, branch, upi_id, remarks,
+            paid_by, status, snapshot_json
+          ) values (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9::date, $10, $11, $12,
+            $13, $14, $15, $16, $17, $18,
+            $19, 'completed', $20::jsonb
+          )
+        `, [
+          paymentId, payrollRow.id, payrollRow.payroll_run_id, receiptNo, staffId, staffRow.name, staffRow.employee_id || payrollRow.employee_id,
+          paymentRecord.paymentMethod, paymentDate, netAmount, transactionId, effectiveHolder,
+          effectiveBank, accountMasked, effectiveIfsc, effectiveBranch, effectiveUpi, remarks,
+          paidBy, JSON.stringify({
+            staff: { name: staffRow.name, employeeId: staffRow.employee_id, role: staffRow.role || staffRow.staff_type, employmentType: staffRow.employment_type },
+            payroll: { period: period.key, periodStart: payrollRow.period_start, periodEnd: payrollRow.period_end, grossPay: payrollRow.gross_pay, deductions: payrollRow.deductions, netPay: payrollRow.net_pay },
+            breakdown: payrollRow.breakdown_json,
+            snapshot: payrollRow.snapshot_json
+          })
+        ]);
+
+        await client.query(`
+          update public.payroll
+          set status='settled',
+              paid_at=$2::date,
+              record_json=jsonb_set(coalesce(record_json,'{}'::jsonb), '{payment}', $3::jsonb, true),
+              updated_at=now()
+          where id=$1
+        `, [payrollRow.id, paymentDate, JSON.stringify(paymentRecord)]);
+
+        if (payrollRow.payroll_run_id) {
+          await client.query(`
+            update public.payroll_runs r
+            set settled_amount = (select coalesce(sum(net_pay),0) from public.payroll where payroll_run_id=r.id and status='settled'),
+                status = case when not exists(select 1 from public.payroll where payroll_run_id=r.id and status != 'settled') then 'settled' else r.status end,
+                settled_at = case when not exists(select 1 from public.payroll where payroll_run_id=r.id and status != 'settled') then coalesce(r.settled_at, now()) else r.settled_at end,
+                settled_by = case when not exists(select 1 from public.payroll where payroll_run_id=r.id and status != 'settled') then coalesce(r.settled_by, $2) else r.settled_by end,
+                updated_at = now()
+            where id=$1
+          `, [payrollRow.payroll_run_id, auth.account.id]);
+        }
+
+        await audit(client, auth.account, 'payroll.paid', { payrollId: payrollRow.id, receiptNo, amount: netAmount, paymentMethod, transactionId }, staffId, payrollRow.payroll_run_id, remarks);
+
+        await client.query('commit');
+        invalidate();
+
+        return send(res, 200, {
+          ok: true,
+          message: `Salary of ₹${netAmount.toLocaleString('en-IN')} paid successfully. Receipt generated.`,
+          receiptNo,
+          payment: paymentRecord
+        });
+      } catch (err) {
+        await client.query('rollback');
+        log(pathname, 'record payroll payment', err);
+        return send(res, 500, { error: 'Payment could not be recorded. Please retry.' });
+      } finally {
+        client.release();
+      }
+    }
+    const receiptMatch = pathname.match(/^\/api\/admin\/payroll\/receipts\/([^/]+)$/);
+    if (req.method === 'GET' && receiptMatch) {
+      const receiptNo = decodeURIComponent(receiptMatch[1]);
+      const { rows } = await queryWithLimit(() => getPool().query(`
+        select pp.*, p.gross_pay, p.deductions, p.net_pay, p.period_start, p.period_end, p.attendance_days, p.payable_hours, p.breakdown_json, p.snapshot_json
+        from public.payroll_payments pp
+        join public.payroll p on p.id=pp.payroll_id
+        where pp.receipt_no=$1
+      `, [receiptNo]));
+      if (!rows[0]) return send(res, 404, { error: 'Receipt not found.' });
+      return send(res, 200, { receipt: rows[0] });
     }
     if (req.method === 'POST' && pathname === '/api/admin/payroll/staff-payment-details') {
       const data = await input(req, res, auth); if (!data) return;

@@ -294,13 +294,91 @@ async function handleTeacherRoute(req, res, url, deps = {}) {
     }
 
     if (req.method === 'GET' && path === '/api/teacher/payslips') {
-      const { rows } = await queryWithLimit(() => pool.query(`select p.id,p.period_start,p.period_end,p.gross_pay,p.deductions,p.net_pay,p.status,p.payroll_run_id,r.status run_status,p.snapshot_json from public.payroll p join public.payroll_runs r on r.id=p.payroll_run_id where p.employee_key=$1 and r.status in ('finalized','settled') order by p.period_start desc limit 120`, [staffId]));
-      const records = rows.map(row => ({ id: row.id, periodStart: row.period_start, periodEnd: row.period_end, grossPay: Number(row.gross_pay || 0), deductions: Number(row.deductions || 0), netPay: Number(row.net_pay || 0), status: row.status || row.run_status, period: row.snapshot_json?.period || null }));
-      return send(res, 200, { records, stats: { available: records.length, thisYear: records.filter(row => String(row.periodStart || '').startsWith(String(new Date().getFullYear()))).length, lifetimeEarned: records.reduce((sum, row) => sum + row.netPay, 0) } });
+      const [payrollResult, privResult] = await Promise.all([
+        queryWithLimit(() => pool.query(`
+          select p.id, p.period_start, p.period_end, p.gross_pay, p.deductions, p.net_pay, p.status, p.paid_at,
+                 p.attendance_days, p.payable_hours, p.payroll_run_id, r.status as run_status,
+                 p.snapshot_json, p.breakdown_json, p.record_json,
+                 pp.id as payment_id, pp.receipt_no, pp.payment_method, pp.transaction_id, pp.payment_date,
+                 pp.account_holder_name, pp.bank_name, pp.account_number_masked, pp.ifsc_code, pp.branch, pp.upi_id, pp.remarks, pp.paid_by
+          from public.payroll p
+          left join public.payroll_runs r on r.id = p.payroll_run_id
+          left join public.payroll_payments pp on pp.payroll_id = p.id and pp.status = 'completed'
+          where p.employee_key = $1
+          order by p.period_start desc limit 120
+        `, [staffId])),
+        queryWithLimit(() => pool.query(`
+          select account_holder_name, bank_name, bank_account_number, ifsc_code, branch, upi_id, payment_mode
+          from public.staff_private where staff_id = $1
+        `, [staffId]))
+      ]);
+
+      const priv = privResult.rows[0] || {};
+      const rawAcc = priv.bank_account_number || '';
+      const accountMasked = rawAcc ? (rawAcc.length > 4 ? `•••• •••• ${rawAcc.slice(-4)}` : rawAcc) : '';
+
+      const paymentDetails = {
+        paymentMode: priv.payment_mode || 'both',
+        accountHolderName: priv.account_holder_name || '',
+        bankName: priv.bank_name || '',
+        accountMasked,
+        ifscCode: priv.ifsc_code || '',
+        branch: priv.branch || '',
+        upiId: priv.upi_id || ''
+      };
+
+      const records = payrollResult.rows.map(row => {
+        const isPaid = row.status === 'settled' || Boolean(row.receipt_no);
+        const payment = isPaid ? {
+          receiptNo: row.receipt_no || row.record_json?.payment?.receiptNo,
+          paymentMethod: row.payment_method || row.record_json?.payment?.paymentMethod || 'Bank Transfer',
+          transactionId: row.transaction_id || row.record_json?.payment?.transactionId || '',
+          paymentDate: row.payment_date ? String(row.payment_date).slice(0, 10) : (row.paid_at ? String(row.paid_at).slice(0, 10) : null),
+          amount: Number(row.net_pay || 0),
+          remarks: row.remarks || row.record_json?.payment?.remarks || '',
+          paidBy: row.paid_by || row.record_json?.payment?.paidBy || '',
+          accountHolderName: row.account_holder_name,
+          bankName: row.bank_name,
+          accountMasked: row.account_number_masked,
+          ifscCode: row.ifsc_code,
+          branch: row.branch,
+          upiId: row.upi_id,
+        } : null;
+
+        return {
+          id: row.id,
+          periodStart: row.period_start,
+          periodEnd: row.period_end,
+          grossPay: Number(row.gross_pay || 0),
+          deductions: Number(row.deductions || 0),
+          netPay: Number(row.net_pay || 0),
+          attendanceDays: Number(row.attendance_days || 0),
+          payableHours: Number(row.payable_hours || 0),
+          status: isPaid ? 'Paid' : (row.status === 'draft' ? 'Generated' : (row.status || 'Pending')),
+          isPaid,
+          paidAt: row.paid_at,
+          paymentMethod: payment?.paymentMethod || null,
+          receiptNo: payment?.receiptNo || null,
+          payment,
+          period: row.snapshot_json?.period || null,
+          breakdown: row.breakdown_json || row.snapshot_json?.calculation || {},
+          snapshot: row.snapshot_json || {},
+        };
+      });
+
+      return send(res, 200, {
+        records,
+        paymentDetails,
+        stats: {
+          available: records.filter(r => r.isPaid).length,
+          thisYear: records.filter(row => row.isPaid && String(row.periodStart || '').startsWith(String(new Date().getFullYear()))).length,
+          lifetimeEarned: records.filter(r => r.isPaid).reduce((sum, row) => sum + row.netPay, 0)
+        }
+      });
     }
     const slipMatch = path.match(/^\/api\/teacher\/payslips\/([^/]+)$/);
     if (req.method === 'GET' && slipMatch) {
-      const { rows } = await queryWithLimit(() => pool.query(`select p.id,p.employee_id,p.employee_key,p.period_start,p.period_end,p.status,p.gross_pay,p.deductions,p.net_pay,p.payable_hours,p.attendance_days,p.snapshot_json,p.breakdown_json,r.status run_status from public.payroll p join public.payroll_runs r on r.id=p.payroll_run_id where p.id=$1 and p.employee_key=$2 and r.status in ('finalized','settled')`, [decodeURIComponent(slipMatch[1]), staffId]));
+      const { rows } = await queryWithLimit(() => pool.query(`select p.id,p.employee_id,p.employee_key,p.period_start,p.period_end,p.status,p.gross_pay,p.deductions,p.net_pay,p.payable_hours,p.attendance_days,p.snapshot_json,p.breakdown_json,r.status run_status from public.payroll p join public.payroll_runs r on r.id=p.payroll_run_id where p.id=$1 and p.employee_key=$2`, [decodeURIComponent(slipMatch[1]), staffId]));
       if (!rows[0]) return send(res, 404, { error: 'Payslip was not found.' });
       const row = rows[0], snapshot = row.snapshot_json || {}, calc = snapshot.calculation || row.breakdown_json || {};
       const lines = ['Staff Payslip', `Period: ${String(row.period_start).slice(0,10)} - ${String(row.period_end).slice(0,10)}`, `Staff: ${staff.name || 'Teacher'}   Employee ID: ${row.employee_id || staff.employee_id || '-'}`, `Present days: ${Number(row.attendance_days || 0)}   Approved hours: ${Number(row.payable_hours || 0)}`, `Gross pay: INR ${Number(row.gross_pay || 0).toFixed(2)}`, `Deductions: INR ${Number(row.deductions || 0).toFixed(2)}`, `Net pay: INR ${Number(row.net_pay || 0).toFixed(2)}`, `Status: ${row.status || row.run_status}`];

@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AdminIcon from '../components/AdminIcon';
+import QRCode from 'qrcode';
 import { payrollDownload, payrollGet, payrollWrite, type PayrollDashboard, type PayrollStaff } from '../services/payroll';
 
-type Modal = 'run' | 'generation-result' | 'increment' | 'advance' | 'profile' | 'work' | 'adjustment' | 'detail' | 'history' | 'settle' | 'zoom' | 'view-calculation' | 'payment-details' | '';
+type Modal = 'run' | 'generation-result' | 'increment' | 'advance' | 'profile' | 'work' | 'adjustment' | 'detail' | 'history' | 'settle' | 'zoom' | 'view-calculation' | 'payment-details' | 'pay' | 'receipt' | '';
 type Preview = { period: { key: string }; workingDays: number; records: (PayrollStaff & { eligible: boolean; warnings: string[] })[]; totals: { staff: number; gross: number; deductions: number; net: number } };
 type GenerationResult = { run: { id: string; period: string; status: string; staffCount: number; grossTotal: number; deductionTotal: number; netTotal: number }; generated: number; skipped: Array<{ staffId: string; name: string; reason: string }> };
 type Detail = { staff: Record<string, unknown>; payrollHistory: Array<Record<string, any>>; workRecords: Array<Record<string, any>>; compensationHistory: Array<Record<string, any>>; adjustments: Array<Record<string, any>> };
@@ -155,6 +156,151 @@ export default function AdminPayrollPage() {
       upiId: staff.paymentDetails?.upiId || ''
     });
     setModal('payment-details');
+  }
+
+  // Pay and Receipt State (Tasks 4 & 5)
+  const [payMethod, setPayMethod] = useState<'Bank Transfer' | 'UPI'>('Bank Transfer');
+  const [payTxnId, setPayTxnId] = useState('');
+  const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [payRemarks, setPayRemarks] = useState('');
+  const [editBankInline, setEditBankInline] = useState(false);
+  const [bankForm, setBankForm] = useState({ accountHolderName: '', bankName: '', bankAccountNumber: '', ifscCode: '', branch: '' });
+  const [upiInput, setUpiInput] = useState('');
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [paying, setPaying] = useState(false);
+  const [receiptData, setReceiptData] = useState<any>(null);
+
+  const generateQr = useCallback(async (vpa: string, staffName: string, amount: number, periodLabel: string) => {
+    if (!vpa) { setQrCodeUrl(''); return; }
+    try {
+      const upiUri = `upi://pay?pa=${encodeURIComponent(vpa)}&pn=${encodeURIComponent(staffName)}&am=${amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Salary ${periodLabel}`)}`;
+      const url = await QRCode.toDataURL(upiUri, { width: 220, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } });
+      setQrCodeUrl(url);
+    } catch (err) {
+      console.error('QR generation error:', err);
+      setQrCodeUrl('');
+    }
+  }, []);
+
+  function openPay(staff: PayrollStaff) {
+    setSelected(staff);
+    setError('');
+    const pref = staff.paymentDetails?.paymentMode === 'upi' ? 'UPI' : 'Bank Transfer';
+    setPayMethod(pref);
+    setPayTxnId('');
+    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayRemarks('');
+    setEditBankInline(!staff.paymentDetails?.bankAccountNumber);
+    setBankForm({
+      accountHolderName: staff.paymentDetails?.accountHolderName || staff.name || '',
+      bankName: staff.paymentDetails?.bankName || '',
+      bankAccountNumber: staff.paymentDetails?.bankAccountNumber || '',
+      ifscCode: staff.paymentDetails?.ifscCode || '',
+      branch: staff.paymentDetails?.branch || '',
+    });
+    const vpa = staff.paymentDetails?.upiId || '';
+    setUpiInput(vpa);
+    const periodLabel = `${monthNames[(data?.period.month ?? 10) - 1]} ${data?.period.year ?? 2026}`;
+    if (vpa) {
+      void generateQr(vpa, staff.name, staff.netPay, periodLabel);
+    } else {
+      setQrCodeUrl('');
+    }
+    setModal('pay');
+  }
+
+  function openReceipt(staff: PayrollStaff, paymentOverride?: any) {
+    setSelected(staff);
+    const payment = paymentOverride || staff.payment || {};
+    const periodLabel = `${monthNames[(data?.period.month ?? 10) - 1]} ${data?.period.year ?? 2026}`;
+    setReceiptData({
+      staff,
+      payment,
+      periodLabel,
+      receiptNo: payment.receiptNo || `MJM-SAL-${data?.period.year || 2026}-${staff.employeeId || '001'}`,
+      paymentDate: payment.paymentDate || staff.paidAt || new Date().toISOString().slice(0, 10),
+      amount: payment.amount || staff.netPay || 0,
+      paymentMethod: payment.paymentMethod || 'Bank Transfer',
+      transactionId: payment.transactionId || '—',
+      remarks: payment.remarks || '',
+      paidBy: payment.paidBy || 'Institute Admin',
+      accountHolderName: payment.accountHolderName || staff.paymentDetails?.accountHolderName || staff.name,
+      bankName: payment.bankName || staff.paymentDetails?.bankName || '',
+      accountMasked: payment.accountMasked || (staff.paymentDetails?.bankAccountNumber ? `•••• •••• ${staff.paymentDetails.bankAccountNumber.slice(-4)}` : '—'),
+      ifscCode: payment.ifscCode || staff.paymentDetails?.ifscCode || '',
+      upiId: payment.upiId || staff.paymentDetails?.upiId || '',
+    });
+    setModal('receipt');
+  }
+
+  async function submitPayment(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || !data) return;
+    if (!payTxnId.trim()) {
+      setError('Transaction / Reference number (UTR) is required.');
+      return;
+    }
+    if (payMethod === 'Bank Transfer' && editBankInline && !bankForm.bankAccountNumber && !selected.paymentDetails?.bankAccountNumber) {
+      setError('Please provide bank account number for Bank Transfer.');
+      return;
+    }
+    if (payMethod === 'UPI' && !upiInput.trim() && !selected.paymentDetails?.upiId) {
+      setError('Please provide UPI ID for UPI payment.');
+      return;
+    }
+
+    setPaying(true);
+    setError('');
+    try {
+      const res = await payrollWrite<{ ok: boolean; message: string; receiptNo: string; payment: any }>('/pay', 'POST', {
+        staffId: selected.id,
+        period: data.period.key,
+        paymentMethod: payMethod,
+        transactionId: payTxnId.trim(),
+        paymentDate: payDate,
+        remarks: payRemarks.trim(),
+        accountHolderName: bankForm.accountHolderName,
+        bankName: bankForm.bankName,
+        bankAccountNumber: bankForm.bankAccountNumber,
+        ifscCode: bankForm.ifscCode,
+        branch: bankForm.branch,
+        upiId: upiInput.trim(),
+      });
+
+      setNotice(res.message || 'Payment recorded successfully. Receipt generated.');
+
+      const updatedStaff: PayrollStaff = {
+        ...selected,
+        isPaid: true,
+        payrollStatus: 'settled',
+        paidAt: payDate,
+        payment: res.payment,
+        hasPaymentDetails: true,
+        paymentDetails: {
+          ...selected.paymentDetails,
+          accountHolderName: bankForm.accountHolderName || selected.paymentDetails?.accountHolderName,
+          bankName: bankForm.bankName || selected.paymentDetails?.bankName,
+          bankAccountNumber: bankForm.bankAccountNumber || selected.paymentDetails?.bankAccountNumber,
+          ifscCode: bankForm.ifscCode || selected.paymentDetails?.ifscCode,
+          branch: bankForm.branch || selected.paymentDetails?.branch,
+          upiId: upiInput.trim() || selected.paymentDetails?.upiId,
+        }
+      };
+
+      setData(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          staff: prev.staff.map(s => s.id === selected.id ? updatedStaff : s)
+        };
+      });
+
+      openReceipt(updatedStaff, res.payment);
+    } catch (err: any) {
+      setError(err.message || 'Payment could not be completed. Please retry.');
+    } finally {
+      setPaying(false);
+    }
   }
 
   async function savePaymentDetails(event: FormEvent) {
@@ -606,14 +752,18 @@ export default function AdminPayrollPage() {
                   <td className="px-3 py-3 font-black text-emerald-700">{inr(staff.netPay)}</td>
                   <td className="px-3 py-3">
                     <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-black ${
+                      staff.isPaid || staff.payrollStatus === 'settled' || data?.run?.status === 'settled' ? 'bg-emerald-100 text-emerald-700' :
                       !staff.profileSet ? 'bg-amber-100 text-amber-800' :
                       staff.pendingWorkRecords ? 'bg-orange-100 text-orange-800' :
-                      data?.run?.status === 'settled' ? 'bg-emerald-100 text-emerald-700' :
-                      data?.run?.status === 'finalized' ? 'bg-violet-100 text-violet-700' :
-                      data?.run ? 'bg-blue-100 text-slate-800' :
+                      staff.isGenerated || data?.run ? 'bg-blue-100 text-slate-800' :
                       'bg-slate-100 text-slate-600'
                     }`}>
-                      {!staff.profileSet ? 'Profile needed' : staff.pendingWorkRecords ? 'Review needed' : data?.run?.status ? (data.run.status === 'draft' ? 'Generated' : data.run.status) : 'Not generated'}
+                      {staff.isPaid || staff.payrollStatus === 'settled' ? 'Paid' :
+                       !staff.profileSet ? 'Profile needed' :
+                       staff.pendingWorkRecords ? 'Review needed' :
+                       staff.isGenerated ? (staff.payrollStatus === 'draft' ? 'Generated' : staff.payrollStatus) :
+                       data?.run?.status ? (data.run.status === 'draft' ? 'Generated' : data.run.status) :
+                       'Not generated'}
                     </span>
                   </td>
                   <td className="px-3 py-3">
@@ -626,13 +776,38 @@ export default function AdminPayrollPage() {
                         <AdminIcon name="calculator" className="h-3.5 w-3.5" />
                         Breakdown
                       </button>
+
+                      {staff.isPaid || staff.payrollStatus === 'settled' ? (
+                        <button
+                          title="View / Print Salary Payment Receipt"
+                          onClick={() => openReceipt(staff)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-black text-emerald-800 hover:bg-emerald-100 transition shadow-sm"
+                        >
+                          <AdminIcon name="document" className="h-3.5 w-3.5 text-emerald-700" />
+                          Receipt
+                        </button>
+                      ) : (
+                        <button
+                          title={staff.isGenerated ? "Disburse Salary Payment via Bank Transfer or UPI" : "Generate payroll first to enable payout"}
+                          disabled={!staff.isGenerated}
+                          onClick={() => openPay(staff)}
+                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-black transition shadow-sm ${
+                            staff.isGenerated
+                              ? 'border border-orange-500 bg-orange-500 text-white hover:bg-orange-600'
+                              : 'border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <AdminIcon name="payment" className="h-3.5 w-3.5" />
+                          Pay
+                        </button>
+                      )}
+
                       <button
-                        title={staff.hasPaymentDetails ? "View / Edit Payment Details" : "Add Payment Details"}
+                        title={staff.hasPaymentDetails ? "View / Edit Bank Details" : "Add Payment Details"}
                         onClick={() => openPaymentDetails(staff)}
-                        className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-bold transition ${staff.hasPaymentDetails ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
+                        className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-bold transition ${staff.hasPaymentDetails ? 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50' : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
                       >
-                        <AdminIcon name="payment" className="h-3.5 w-3.5" />
-                        Pay
+                        <AdminIcon name="key" className="h-3.5 w-3.5" />
                       </button>
                       <button
                         title="Edit compensation profile"
@@ -1282,6 +1457,537 @@ export default function AdminPayrollPage() {
             </footer>
           </form>
         </ModalFrame>
+      )}
+
+            {/* Pay Salary Modal (Task 4) */}
+      {modal === 'pay' && selected && (
+        <ModalFrame title={`Pay Salary — ${selected.name}`} icon="payment" onClose={() => setModal('')} wide>
+          <form className="space-y-5" onSubmit={submitPayment}>
+            {/* Top Staff & Period Summary */}
+            <div className="rounded-2xl border border-orange-200 bg-gradient-to-r from-orange-50 to-orange-100/50 p-4 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-900">{selected.name}</h3>
+                  <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-black uppercase text-orange-800">
+                    {selected.employeeId || 'EMP'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {selected.role} • {modelLabel[selected.model] || selected.employmentType}
+                </p>
+                <p className="text-xs font-extrabold text-orange-700 mt-1">
+                  Salary Period: {monthNames[(data?.period.month ?? 10) - 1]} {data?.period.year ?? 2026}
+                </p>
+              </div>
+
+              <div className="text-right">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">Net Payable Amount</span>
+                <div className="text-2xl sm:text-3xl font-black text-emerald-700 tracking-tight">
+                  {inr(selected.netPay)}
+                </div>
+                <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-slate-500">
+                  <span>Gross: <b>{inr(selected.grossPay)}</b></span>
+                  <span>•</span>
+                  <span>Deductions: <b className="text-rose-600">{inr(selected.totalDeductions)}</b></span>
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Method Selector */}
+            <div>
+              <span className="block text-xs font-black uppercase tracking-wide text-slate-700 mb-2">
+                Select Payment Method
+              </span>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPayMethod('Bank Transfer')}
+                  className={`flex items-center justify-center gap-2 rounded-2xl border-2 p-3 text-sm font-black transition ${
+                    payMethod === 'Bank Transfer'
+                      ? 'border-orange-500 bg-orange-50 text-orange-900 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <AdminIcon name="building" className="h-5 w-5 text-orange-600" />
+                  Bank Transfer (NEFT / IMPS)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPayMethod('UPI');
+                    if (upiInput) {
+                      const periodLabel = `${monthNames[(data?.period.month ?? 10) - 1]} ${data?.period.year ?? 2026}`;
+                      void generateQr(upiInput, selected.name, selected.netPay, periodLabel);
+                    }
+                  }}
+                  className={`flex items-center justify-center gap-2 rounded-2xl border-2 p-3 text-sm font-black transition ${
+                    payMethod === 'UPI'
+                      ? 'border-orange-500 bg-orange-50 text-orange-900 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <AdminIcon name="qrcode" className="h-5 w-5 text-orange-600" />
+                  UPI (QR Code / VPA)
+                </button>
+              </div>
+            </div>
+
+            {/* Bank Transfer View */}
+            {payMethod === 'Bank Transfer' && (
+              <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-orange-800">
+                    Beneficiary Bank Details
+                  </h4>
+                  {selected.paymentDetails?.bankAccountNumber && (
+                    <button
+                      type="button"
+                      onClick={() => setEditBankInline(!editBankInline)}
+                      className="text-xs font-bold text-orange-600 hover:underline"
+                    >
+                      {editBankInline ? 'Use Saved Details' : 'Edit / Update Details'}
+                    </button>
+                  )}
+                </div>
+
+                {!editBankInline && selected.paymentDetails?.bankAccountNumber ? (
+                  <div className="grid gap-2 sm:grid-cols-2 text-xs bg-white rounded-xl p-3.5 border border-slate-200">
+                    <div>
+                      <span className="text-slate-400 block font-semibold">Account Holder</span>
+                      <strong className="text-slate-900 text-sm">{selected.paymentDetails.accountHolderName || selected.name}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block font-semibold">Bank Name</span>
+                      <strong className="text-slate-800 text-sm">{selected.paymentDetails.bankName || 'Bank'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block font-semibold">Account Number</span>
+                      <strong className="font-mono text-slate-900 text-sm">
+                        •••• •••• {selected.paymentDetails.bankAccountNumber.slice(-4)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block font-semibold">IFSC Code</span>
+                      <strong className="font-mono text-orange-700 text-sm">{selected.paymentDetails.ifscCode || '—'}</strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Account Holder Name">
+                      <input
+                        className={fieldClass}
+                        value={bankForm.accountHolderName}
+                        onChange={e => setBankForm(b => ({ ...b, accountHolderName: e.target.value }))}
+                        placeholder={selected.name}
+                      />
+                    </Field>
+                    <Field label="Bank Name">
+                      <input
+                        className={fieldClass}
+                        value={bankForm.bankName}
+                        onChange={e => setBankForm(b => ({ ...b, bankName: e.target.value }))}
+                        placeholder="e.g. HDFC Bank, SBI"
+                      />
+                    </Field>
+                    <Field label="Account Number*">
+                      <input
+                        className={fieldClass}
+                        value={bankForm.bankAccountNumber}
+                        onChange={e => setBankForm(b => ({ ...b, bankAccountNumber: e.target.value }))}
+                        placeholder="Enter full account number"
+                      />
+                    </Field>
+                    <Field label="IFSC Code">
+                      <input
+                        className={fieldClass}
+                        value={bankForm.ifscCode}
+                        onChange={e => setBankForm(b => ({ ...b, ifscCode: e.target.value.toUpperCase() }))}
+                        placeholder="e.g. HDFC0001234"
+                      />
+                    </Field>
+                    <Field label="Branch Name">
+                      <input
+                        className={fieldClass}
+                        value={bankForm.branch}
+                        onChange={e => setBankForm(b => ({ ...b, branch: e.target.value }))}
+                        placeholder="e.g. Connaught Place"
+                      />
+                    </Field>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* UPI View */}
+            {payMethod === 'UPI' && (
+              <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-orange-800">
+                  UPI Payout (Instant QR)
+                </h4>
+
+                <div className="grid gap-4 sm:grid-cols-[1fr_240px] items-start">
+                  <div className="space-y-3">
+                    <Field label="Staff UPI ID / VPA*">
+                      <input
+                        className={fieldClass}
+                        value={upiInput}
+                        onChange={e => {
+                          const v = e.target.value.toLowerCase().trim();
+                          setUpiInput(v);
+                          const periodLabel = `${monthNames[(data?.period.month ?? 10) - 1]} ${data?.period.year ?? 2026}`;
+                          void generateQr(v, selected.name, selected.netPay, periodLabel);
+                        }}
+                        placeholder="e.g. name@okhdfcbank or 9876543210@paytm"
+                      />
+                    </Field>
+                    <p className="text-xs text-slate-500">
+                      Scan the QR code directly from any UPI app (Google Pay, PhonePe, Paytm, BHIM) to transfer exact salary.
+                    </p>
+                    <div className="rounded-xl bg-orange-100/60 p-3 text-xs text-orange-900 border border-orange-200">
+                      <b>Amount locked:</b> {inr(selected.netPay)} • <b>Payee:</b> {selected.name}
+                    </div>
+                  </div>
+
+                  {/* QR Box */}
+                  <div className="rounded-2xl border border-orange-200 bg-white p-3 text-center shadow-sm">
+                    {qrCodeUrl ? (
+                      <div>
+                        <img src={qrCodeUrl} alt="UPI QR Code" className="h-44 w-44 mx-auto object-contain rounded-lg" />
+                        <div className="mt-2 text-xs font-mono font-bold text-slate-700 truncate" title={upiInput}>
+                          {upiInput}
+                        </div>
+                        <div className="text-sm font-black text-emerald-700 mt-0.5">
+                          {inr(selected.netPay)}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-12 px-4 text-xs text-slate-400">
+                        Enter a valid UPI ID to generate live QR code
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Transaction Reference & Settlement Inputs */}
+            <div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4 space-y-3">
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">
+                Payment Confirmation & Reference
+              </h4>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Transaction / Reference ID (UTR)*">
+                  <input
+                    required
+                    className={fieldClass}
+                    value={payTxnId}
+                    onChange={e => setPayTxnId(e.target.value)}
+                    placeholder="e.g. UTR-20261026-98124 or IMPS123456"
+                  />
+                </Field>
+                <Field label="Payment Date*">
+                  <input
+                    type="date"
+                    required
+                    className={fieldClass}
+                    value={payDate}
+                    onChange={e => setPayDate(e.target.value)}
+                  />
+                </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Remarks / Notes (Optional)">
+                    <input
+                      className={fieldClass}
+                      value={payRemarks}
+                      onChange={e => setPayRemarks(e.target.value)}
+                      placeholder="e.g. October 2026 salary payout settled"
+                    />
+                  </Field>
+                </div>
+              </div>
+            </div>
+
+            <footer className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                className={`${button} border border-slate-300 bg-white text-slate-600 hover:bg-slate-50`}
+                onClick={() => setModal('')}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={paying}
+                className={`${button} bg-orange-500 text-white hover:bg-orange-600 shadow-md`}
+              >
+                {paying ? 'Processing Payment…' : `Confirm & Pay ${inr(selected.netPay)}`}
+              </button>
+            </footer>
+          </form>
+        </ModalFrame>
+      )}
+
+      {/* Salary Payment Receipt / Payslip Modal (Task 5) */}
+      {modal === 'receipt' && receiptData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-3xl my-8 rounded-3xl bg-white shadow-2xl overflow-hidden text-slate-800 border border-orange-200">
+            {/* Top Action Bar (hidden on print) */}
+            <div className="flex items-center justify-between bg-gradient-to-r from-orange-600 to-orange-500 px-6 py-4 text-white print:hidden">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setModal('')}
+                  className="rounded-xl bg-white/20 hover:bg-white/30 px-3 py-1.5 text-xs font-black transition"
+                >
+                  ← Back to Payroll
+                </button>
+                <span className="font-extrabold text-sm sm:text-base">Salary Payment Receipt Preview</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-white text-orange-600 hover:bg-orange-50 px-3.5 py-1.5 text-xs font-black shadow-md transition"
+                >
+                  <AdminIcon name="print" className="h-4 w-4" />
+                  Print / Save PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModal('')}
+                  className="rounded-xl p-1.5 hover:bg-white/20 transition text-white"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Printable Receipt Container */}
+            <div id="salary-receipt-view" className="p-8 space-y-6 bg-white print:p-6 print:border-none">
+              {/* Receipt Header */}
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-orange-500 pb-5">
+                <div>
+                  <div className="inline-block rounded-xl bg-white p-2 border border-orange-100 shadow-sm">
+                    <img
+                      src="/mainlogo.png"
+                      alt="My JEE Mentor"
+                      className="h-10 w-auto object-contain"
+                      onError={e => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs font-bold text-slate-600">
+                    amyjeementor@gmail.com | 7294048814
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    My JEE Mentor • Advanced Learning & Test Preparation Institute
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-block rounded-full bg-emerald-100 px-3 py-1 text-xs font-black uppercase tracking-wider text-emerald-800 mb-1">
+                    ✓ Fully Paid
+                  </span>
+                  <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 uppercase">
+                    Salary Payment Receipt
+                  </h1>
+                  <div className="mt-1 text-xs text-slate-600">
+                    <span>Receipt No: </span>
+                    <strong className="font-mono text-orange-600 font-bold">{receiptData.receiptNo}</strong>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    <span>Payment Date: </span>
+                    <strong className="font-medium text-slate-700">{receiptData.paymentDate}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Staff & Payment Details Grid */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                {/* Staff Info */}
+                <div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-orange-800 mb-3 flex items-center gap-1.5">
+                    <AdminIcon name="person" className="h-4 w-4 text-orange-600" />
+                    Staff Information
+                  </h3>
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Name:</span>
+                      <span className="font-bold text-slate-900">{receiptData.staff?.name}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Employee ID:</span>
+                      <span className="font-mono font-semibold text-slate-800">{receiptData.staff?.employeeId || '—'}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Role / Designation:</span>
+                      <span className="font-semibold text-slate-800">{receiptData.staff?.role}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Employment Model:</span>
+                      <span className="font-semibold text-slate-800">{modelLabel[receiptData.staff?.model] || receiptData.staff?.employmentType}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-slate-500">Salary Period:</span>
+                      <span className="font-extrabold text-orange-700">{receiptData.periodLabel}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Info */}
+                <div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-orange-800 mb-3 flex items-center gap-1.5">
+                    <AdminIcon name="payment" className="h-4 w-4 text-orange-600" />
+                    Disbursement Details
+                  </h3>
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Payment Method:</span>
+                      <span className="font-extrabold text-emerald-800">{receiptData.paymentMethod}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Transaction ID (UTR):</span>
+                      <span className="font-mono font-bold text-slate-900">{receiptData.transactionId}</span>
+                    </div>
+                    {receiptData.paymentMethod === 'UPI' ? (
+                      <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                        <span className="text-slate-500">UPI ID / VPA:</span>
+                        <span className="font-mono font-semibold text-slate-800">{receiptData.upiId || '—'}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                          <span className="text-slate-500">Bank & Branch:</span>
+                          <span className="font-semibold text-slate-800">{receiptData.bankName} {receiptData.staff?.paymentDetails?.branch ? `(${receiptData.staff.paymentDetails.branch})` : ''}</span>
+                        </div>
+                        <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                          <span className="text-slate-500">Account (Masked):</span>
+                          <span className="font-mono font-semibold text-slate-800">{receiptData.accountMasked}</span>
+                        </div>
+                        <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                          <span className="text-slate-500">IFSC Code:</span>
+                          <span className="font-mono font-semibold text-slate-800">{receiptData.ifscCode || '—'}</span>
+                        </div>
+                      </>
+                    )}
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-slate-500">Disbursed By:</span>
+                      <span className="font-medium text-slate-700">{receiptData.paidBy}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Work & Attendance Summary */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs flex flex-wrap items-center justify-around gap-2 text-slate-700">
+                <div>Present: <b>{receiptData.staff?.presentDays} days</b> / {data?.stats.workingDays || 0} working days</div>
+                <div>Attendance: <b>{receiptData.staff?.attendancePercent === null ? '—' : `${receiptData.staff.attendancePercent}%`}</b></div>
+                <div>Approved Teaching: <b>{receiptData.staff?.payableHours?.toFixed(2)} hrs · {receiptData.staff?.approvedClasses} classes</b></div>
+              </div>
+
+              {/* Calculation Breakdown Table */}
+              <div className="overflow-hidden rounded-2xl border border-orange-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-orange-500 text-white font-black uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="p-3">Earnings Particulars</th>
+                      <th className="p-3 text-right">Amount (₹)</th>
+                      <th className="p-3">Deductions Particulars</th>
+                      <th className="p-3 text-right">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-orange-100">
+                    <tr>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Base / Monthly Salary</div>
+                        <div className="text-[10px] text-slate-500">Fixed compensation component</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-800">{inr(receiptData.staff?.baseEarnings || receiptData.staff?.monthlyRate || 0)}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Provident Fund (PF)</div>
+                        <div className="text-[10px] text-slate-500">{receiptData.staff?.pfPercent || 12}% statutory contribution</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-rose-700">{inr(receiptData.staff?.pfDeduction || 0)}</td>
+                    </tr>
+                    <tr>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Teaching / Hourly Earnings</div>
+                        <div className="text-[10px] text-slate-500">{receiptData.staff?.payableHours?.toFixed(2)} hrs @ configured rate</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-800">{inr(receiptData.staff?.teachingEarnings || 0)}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Tax Deducted at Source (TDS)</div>
+                        <div className="text-[10px] text-slate-500">{receiptData.staff?.tdsPercent || 0}% income tax</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-rose-700">{inr(receiptData.staff?.tdsDeduction || 0)}</td>
+                    </tr>
+                    <tr>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Allowances & Incentives</div>
+                        <div className="text-[10px] text-slate-500">Approved extra earnings</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-800">{inr(receiptData.staff?.allowance || receiptData.staff?.otherEarnings || 0)}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-800">Advance Recoveries & Other</div>
+                        <div className="text-[10px] text-slate-500">Adjustments recovered this month</div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-rose-700">{inr((receiptData.staff?.advanceRecovery || 0) + (receiptData.staff?.otherDeductions || 0))}</td>
+                    </tr>
+                    <tr className="bg-orange-50/60 font-black">
+                      <td className="p-3 text-slate-900 uppercase">Gross Earnings</td>
+                      <td className="p-3 text-right text-slate-900">{inr(receiptData.staff?.grossPay || 0)}</td>
+                      <td className="p-3 text-rose-800 uppercase">Total Deductions</td>
+                      <td className="p-3 text-right text-rose-800">{inr(receiptData.staff?.totalDeductions || 0)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Net Salary Paid Highlight Banner */}
+              <div className="rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-5 text-white flex flex-wrap items-center justify-between gap-4 shadow-md">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-orange-100">Net Amount Disbursed & Settled</span>
+                  <h2 className="text-2xl sm:text-3xl font-black mt-0.5 tracking-tight">
+                    {inr(receiptData.amount || receiptData.staff?.netPay || 0)}
+                  </h2>
+                  {receiptData.remarks && (
+                    <p className="text-xs text-orange-100 mt-1 italic">Remarks: {receiptData.remarks}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 rounded-2xl bg-white/20 backdrop-blur-sm px-4 py-2 text-white border border-white/30">
+                  <AdminIcon name="check" className="h-6 w-6 text-emerald-300" />
+                  <div className="text-left">
+                    <div className="text-xs font-black uppercase tracking-wider">Settlement Confirmed</div>
+                    <div className="text-[10px] text-orange-100">Disbursed on {receiptData.paymentDate}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatures & Verification */}
+              <div className="pt-8 grid grid-cols-2 gap-8 text-center text-xs">
+                <div>
+                  <div className="border-b border-slate-300 pb-16 font-bold text-slate-400">
+                    {receiptData.staff?.name}
+                  </div>
+                  <p className="mt-2 font-bold text-slate-700">Staff / Employee Signature</p>
+                </div>
+                <div>
+                  <div className="border-b border-slate-300 pb-16 flex items-end justify-center">
+                    <span className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-1 font-mono text-[10px] font-black text-orange-800 uppercase tracking-widest">
+                      My JEE Mentor • Official Payout Seal
+                    </span>
+                  </div>
+                  <p className="mt-2 font-bold text-slate-700">Authorised Signatory</p>
+                </div>
+              </div>
+
+              {/* Footer Disclaimer */}
+              <div className="border-t border-slate-100 pt-3 text-center text-[10px] text-slate-400">
+                This is a computer-generated salary payment receipt from My JEE Mentor. No physical signature is required.
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Compensation Profile Modal */}

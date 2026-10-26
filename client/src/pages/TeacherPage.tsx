@@ -16,7 +16,7 @@ type NavItem = { title: string; path: string; icon: string };
 const groups: Array<{ title: string; items: NavItem[] }> = [
   { title: 'OVERVIEW', items: [{ title: 'Dashboard', path: '/teacher/dashboard', icon: 'dashboard' }, { title: 'My Students', path: '/teacher/students', icon: 'student' }] },
   { title: 'TEACHING', items: [{ title: 'My Timetable', path: '/teacher/timetable', icon: 'calendar' }, { title: 'Attendance', path: '/teacher/attendance', icon: 'checklist' }, { title: 'Homework', path: '/teacher/homework', icon: 'pencil' }, { title: 'Exams', path: '/teacher/exams', icon: 'quiz' }, { title: 'Results', path: '/teacher/results', icon: 'report' }, { title: 'Shared Files', path: '/teacher/shared-files', icon: 'download' }] },
-  { title: 'ACCOUNT', items: [{ title: 'My Profile', path: '/teacher/profile', icon: 'person' }, { title: 'Leave & Holidays', path: '/teacher/leave', icon: 'eventOff' }, { title: 'My Payslips', path: '/teacher/payslips', icon: 'payment' }] },
+  { title: 'ACCOUNT', items: [{ title: 'My Profile', path: '/teacher/profile', icon: 'person' }, { title: 'Leave & Holidays', path: '/teacher/leave', icon: 'eventOff' }, { title: 'My Payments', path: '/teacher/payslips', icon: 'payment' }] },
 ];
 const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100';
 const buttonClass = 'inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50';
@@ -176,7 +176,397 @@ function FilesView({data,loading,onDownload,onDelete}:{data:Row;loading:boolean;
 function ProfileView({profile,busy,onSave,onPassword}:{profile:Row;busy:boolean;onSave:(value:Row)=>void;onPassword:(value:Row)=>void}) { const [subjects,setSubjects]=useState<string[]>(profile.subjects||[]),[subject,setSubject]=useState('');useEffect(()=>setSubjects(profile.subjects||[]),[profile.subjects]);return <div className="grid gap-5 xl:grid-cols-[.8fr_1.5fr]"><Panel title="My Profile" icon="person"><div className="text-center"><div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-blue-600 text-2xl font-black text-white">{String(profile.name||'T').slice(0,1).toUpperCase()}</div><h3 className="mt-3 text-lg font-black">{profile.name||'Teacher'}</h3><p className="text-sm text-slate-500">{profile.specialization||'Teacher'} · {profile.qualification||'Qualification not set'}</p></div><dl className="mt-5 divide-y divide-slate-100 text-sm">{[['Years Exp.',profile.experience||0],['Subjects',subjects.length],['Employee ID',profile.employeeId||'—']].map(([label,value])=><div key={String(label)} className="flex justify-between py-3"><dt className="text-slate-500">{label}</dt><dd className="font-bold">{String(value)}</dd></div>)}</dl></Panel><div className="space-y-5"><Panel title="Profile Information"><form className="grid gap-4 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);onSave({name:f.get('name'),phone:f.get('phone'),qualification:f.get('qualification'),specialization:f.get('specialization'),experience:f.get('experience'),bio:f.get('bio'),subjects});}}>{[['name','FULL NAME*',profile.name,'text'],['phone','PHONE',profile.phone,'tel'],['qualification','QUALIFICATION',profile.qualification,'text'],['specialization','SPECIALIZATION',profile.specialization,'text'],['experience','EXPERIENCE (YEARS)',profile.experience||0,'number']].map(([name,label,value,type])=><label key={String(name)} className="text-xs font-black text-slate-600">{label}<input name={String(name)} type={String(type)} defaultValue={String(value||'')} required={name==='name'} className={`${inputClass} mt-1.5 normal-case font-normal`}/></label>)}<label className="text-xs font-black text-slate-600">EMPLOYEE ID (READ-ONLY)<input readOnly value={profile.employeeId||''} className={`${inputClass} mt-1.5 bg-slate-50 normal-case font-normal`}/></label><div className="sm:col-span-2"><label className="text-xs font-black text-slate-600">SUBJECTS TAUGHT</label><div className="mt-1.5 flex gap-2"><input value={subject} onChange={e=>setSubject(e.target.value)} className={inputClass} placeholder="Add a subject"/><button type="button" className="rounded-xl border border-blue-200 px-4 text-sm font-bold text-blue-700" onClick={()=>{if(subject.trim()){setSubjects([...subjects,subject.trim()]);setSubject('');}}}>Add</button></div><div className="mt-2 flex flex-wrap gap-2">{subjects.map((item,index)=><button type="button" key={`${item}-${index}`} onClick={()=>setSubjects(subjects.filter((_,i)=>i!==index))} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{item} ×</button>)}</div><p className="mt-1 text-xs text-slate-400">These subjects will appear in the timetable scheduler.</p></div><label className="text-xs font-black text-slate-600 sm:col-span-2">BIO / ABOUT<textarea name="bio" defaultValue={profile.bio||''} className={`${inputClass} mt-1.5 min-h-24 normal-case font-normal`}/></label><div className="sm:col-span-2"><button className={buttonClass} disabled={busy}>{busy?'Saving…':'Save Changes'}</button></div></form></Panel><PasswordForm busy={busy} onSubmit={onPassword}/></div></div> }
 function PasswordForm({busy,onSubmit}:{busy:boolean;onSubmit:(v:Row)=>void}) { return <Panel title="Change Password" icon="shield"><form className="grid gap-3 sm:grid-cols-3" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget),password=String(f.get('password')||''),confirmPassword=String(f.get('confirmPassword')||'');if(password!==confirmPassword){alert('Passwords do not match.');return;}onSubmit({password,confirmPassword});}}>{[['currentPassword','Current password'],['password','New password'],['confirmPassword','Confirm password']].map(([name,label])=><label key={name} className="text-xs font-bold">{label}<input name={name} type="password" required minLength={8} className={`${inputClass} mt-1.5`}/></label>)}<button className={`${buttonClass} sm:col-span-3`} disabled={busy}>Update Password</button></form></Panel> }
 function LeaveView({data,loading,busy,onApply}:{data:Row;loading:boolean;busy:boolean;onApply:(value:Row)=>void}) { return <div className="grid gap-5 xl:grid-cols-[1.5fr_.8fr]"><Panel title="Leave History" icon="eventOff">{loading?<Loading/>:(data.records||[]).length?<div className="overflow-x-auto"><table className="w-full min-w-[540px] text-sm"><thead className="bg-blue-50 text-left text-xs font-black uppercase"><tr>{['TYPE','DATES','DAYS','REASON','STATUS'].map(item=><th key={item} className="px-3 py-3">{item}</th>)}</tr></thead><tbody className="divide-y">{data.records.map((row:Row)=><tr key={row.id}><td className="px-3 py-3">{row.leaveType}</td><td className="px-3 py-3">{row.startDate} – {row.endDate}</td><td className="px-3 py-3">{Math.ceil((new Date(row.endDate).getTime()-new Date(row.startDate).getTime())/86400000)+1}</td><td className="px-3 py-3">{row.reason}</td><td className="px-3 py-3">{row.status}</td></tr>)}</tbody></table></div>:<Empty title="No leave requests found"/>}</Panel><div className="space-y-5"><Panel title="Apply for Leave" icon="event"><form className="grid gap-3" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);onApply({leaveType:f.get('leaveType'),startDate:f.get('startDate'),endDate:f.get('endDate'),reason:f.get('reason')});}}><label className="text-xs font-bold">Leave type<select name="leaveType" className={`${inputClass} mt-1`}><option>Casual</option><option>Sick</option><option>Annual</option><option>Other</option></select></label><label className="text-xs font-bold">From<input name="startDate" required type="date" className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">To<input name="endDate" required type="date" className={`${inputClass} mt-1`}/></label><label className="text-xs font-bold">Reason<textarea name="reason" required maxLength={1000} className={`${inputClass} mt-1 min-h-20`}/></label><button className={buttonClass} disabled={busy}>Submit Request</button></form></Panel><Panel title="Holiday Calendar" icon="calendar">{(data.holidays||[]).length?<div className="space-y-2">{data.holidays.map((row:Row)=><div key={row.id} className="rounded-xl bg-amber-50 p-3"><b className="text-sm">{row.title||row.name}</b><p className="text-xs text-slate-500">{row.startDate||row.date}{row.endDate?` – ${row.endDate}`:''}</p></div>)}</div>:<p className="py-4 text-center text-sm text-slate-500">No holidays added</p>}</Panel></div></div> }
-function PayslipView({data,loading,onDownload}:{data:Row;loading:boolean;onDownload:(item:Row)=>void}) { const rows:Row[]=data.records||[],stats=data.stats||{};return <><p className="mb-5 text-sm text-slate-600">Download your monthly salary slips.</p><div className="grid gap-4 sm:grid-cols-3"><Metric label="SLIPS AVAILABLE" value={stats.available||0} icon="document"/><Metric label="THIS YEAR" value={stats.thisYear||0} icon="calendar" color="green"/><Metric label="LIFETIME EARNED" value={money(stats.lifetimeEarned||0)} icon="rupee" color="amber"/></div><div className="mt-5"><Panel title="Salary History" icon="payment"><Table columns={['PERIOD','GROSS PAY','DEDUCTIONS','NET PAY','STATUS','ACTIONS']} rows={rows} loading={loading} empty="No payslips yet — Your payslips will show here once your institute admin finalizes a payroll run." renderRow={row=><tr key={row.id}><td className="px-4 py-3 font-bold">{new Date(`${String(row.periodStart).slice(0,10)}T00:00:00`).toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</td><td className="px-4 py-3">{money(row.grossPay)}</td><td className="px-4 py-3 text-rose-700">{money(row.deductions)}</td><td className="px-4 py-3 font-bold text-emerald-700">{money(row.netPay)}</td><td className="px-4 py-3">{row.status}</td><td className="px-4 py-3"><button onClick={()=>onDownload(row)} className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-bold text-blue-700">Download PDF</button></td></tr>}/></Panel></div></> }
+function PayslipView({data,loading,onDownload}:{data:Row;loading:boolean;onDownload:(item:Row)=>void}) {
+  const rows: Row[] = data.records || [];
+  const stats = data.stats || {};
+  const paymentDetails = data.paymentDetails || {};
+  const [calcItem, setCalcItem] = useState<Row | null>(null);
+  const [receiptItem, setReceiptItem] = useState<Row | null>(null);
+
+  return (
+    <>
+      <p className="mb-5 text-sm text-slate-600">
+        Review your monthly salary disbursements, detailed calculation breakdowns, and official payment receipts.
+      </p>
+
+      {/* Stats Summary */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Metric label="PAYMENTS RECEIVED" value={stats.available || 0} icon="document" />
+        <Metric label="PAID THIS YEAR" value={stats.thisYear || 0} icon="calendar" color="green" />
+        <Metric label="LIFETIME EARNED" value={money(stats.lifetimeEarned || 0)} icon="rupee" color="amber" />
+      </div>
+
+      {/* Saved Payout Details */}
+      {(paymentDetails.bankName || paymentDetails.accountMasked || paymentDetails.upiId) && (
+        <div className="mt-5 rounded-2xl border border-orange-100 bg-orange-50/40 p-4 text-xs text-slate-700 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-orange-100 pb-2 mb-3">
+            <span className="font-extrabold uppercase tracking-wide text-orange-800 flex items-center gap-1.5">
+              <AdminIcon name="payment" className="h-4 w-4 text-orange-600" />
+              My Saved Payout Details (Confidential)
+            </span>
+            <span className="rounded-full bg-white px-2.5 py-0.5 font-bold text-slate-600 border border-orange-100">
+              Mode: {paymentDetails.paymentMode === 'both' ? 'Bank Transfer / UPI' : paymentDetails.paymentMode?.toUpperCase()}
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div>
+              <span className="text-slate-400 block font-semibold">Account Holder</span>
+              <strong className="text-slate-900">{paymentDetails.accountHolderName || '—'}</strong>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">Bank & Branch</span>
+              <strong className="text-slate-900">{paymentDetails.bankName || '—'} {paymentDetails.branch ? `(${paymentDetails.branch})` : ''}</strong>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">Account Number</span>
+              <strong className="font-mono text-slate-900">{paymentDetails.accountMasked || '—'}</strong>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">UPI ID / VPA</span>
+              <strong className="font-mono text-orange-700">{paymentDetails.upiId || '—'}</strong>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Salary History Table */}
+      <div className="mt-5">
+        <Panel title="My Salary History" icon="payment">
+          <Table
+            columns={['PERIOD', 'NET PAY', 'STATUS', 'PAID DATE', 'METHOD', 'ACTIONS']}
+            rows={rows}
+            loading={loading}
+            empty="No salary records yet — Your salary records will appear here once payroll is processed by institute administration."
+            renderRow={row => {
+              const isPaid = row.isPaid || row.status === 'Paid';
+              const periodName = new Date(`${String(row.periodStart).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+              return (
+                <tr key={row.id} className="hover:bg-slate-50/60 transition">
+                  <td className="px-4 py-3 font-extrabold text-slate-900">{periodName}</td>
+                  <td className="px-4 py-3 font-black text-emerald-700 text-sm">{money(row.netPay)}</td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-black uppercase tracking-wider ${
+                      isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {isPaid ? 'Paid' : 'Pending'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-600 font-medium">
+                    {row.paidAt ? new Date(`${String(row.paidAt).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-xs font-semibold text-slate-700">
+                    {row.paymentMethod || '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCalcItem(row)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700 hover:bg-orange-100 transition"
+                      >
+                        <AdminIcon name="calculator" className="h-3.5 w-3.5" />
+                        Calculation
+                      </button>
+
+                      {isPaid ? (
+                        <button
+                          type="button"
+                          onClick={() => setReceiptItem(row)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-800 hover:bg-emerald-100 transition shadow-sm"
+                        >
+                          <AdminIcon name="document" className="h-3.5 w-3.5 text-emerald-700" />
+                          Receipt
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">Not paid yet</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            }}
+          />
+        </Panel>
+      </div>
+
+      {/* Teacher View Calculation Modal */}
+      {calcItem && (
+        <TeacherDialog title={`Salary Calculation — ${new Date(`${String(calcItem.periodStart).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}`} close={() => setCalcItem(null)}>
+          <div className="space-y-4 text-xs text-slate-800">
+            {/* Work & Attendance Summary */}
+            <div className="grid gap-3 sm:grid-cols-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div>
+                <span className="text-slate-500 block font-semibold">Attendance</span>
+                <strong className="text-sm text-slate-900">{calcItem.attendanceDays || 0} Present Days</strong>
+              </div>
+              <div>
+                <span className="text-slate-500 block font-semibold">Approved Teaching</span>
+                <strong className="text-sm text-slate-900">{Number(calcItem.payableHours || 0).toFixed(2)} Hours</strong>
+              </div>
+              <div>
+                <span className="text-slate-500 block font-semibold">Status</span>
+                <strong className={`text-sm ${calcItem.isPaid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {calcItem.isPaid ? 'Paid & Settled' : 'Pending Settlement'}
+                </strong>
+              </div>
+            </div>
+
+            {/* Breakdown Table */}
+            <div className="overflow-hidden rounded-xl border border-orange-200">
+              <table className="w-full text-left">
+                <thead className="bg-orange-500 text-white font-black uppercase text-[10px] tracking-wider">
+                  <tr>
+                    <th className="p-2.5">Earnings Particulars</th>
+                    <th className="p-2.5 text-right">Amount</th>
+                    <th className="p-2.5">Deductions</th>
+                    <th className="p-2.5 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-orange-100">
+                  <tr>
+                    <td className="p-2.5 font-bold">Base / Monthly Component</td>
+                    <td className="p-2.5 text-right font-bold">{money(calcItem.breakdown?.baseSalary || calcItem.grossPay || 0)}</td>
+                    <td className="p-2.5 font-bold">Provident Fund (PF)</td>
+                    <td className="p-2.5 text-right font-bold text-rose-700">{money(calcItem.breakdown?.pfDeduction || 0)}</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold">Teaching / Hourly Earnings</td>
+                    <td className="p-2.5 text-right font-bold">{money(calcItem.breakdown?.teachingEarnings || 0)}</td>
+                    <td className="p-2.5 font-bold">Tax Deducted at Source (TDS)</td>
+                    <td className="p-2.5 text-right font-bold text-rose-700">{money(calcItem.breakdown?.tdsDeduction || 0)}</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold">Allowances & Other Earnings</td>
+                    <td className="p-2.5 text-right font-bold">{money(calcItem.breakdown?.allowances || 0)}</td>
+                    <td className="p-2.5 font-bold">Advance Repayment / Other</td>
+                    <td className="p-2.5 text-right font-bold text-rose-700">{money((calcItem.breakdown?.advanceRecovery || 0) + (calcItem.breakdown?.otherDeductions || 0))}</td>
+                  </tr>
+                  <tr className="bg-orange-50/60 font-black">
+                    <td className="p-2.5 uppercase">Gross Total</td>
+                    <td className="p-2.5 text-right text-slate-900">{money(calcItem.grossPay)}</td>
+                    <td className="p-2.5 uppercase text-rose-800">Total Deductions</td>
+                    <td className="p-2.5 text-right text-rose-800">{money(calcItem.deductions)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Net Amount Banner */}
+            <div className="rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 p-4 text-white flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-bold uppercase text-orange-100">Net Payable Amount</span>
+                <div className="text-2xl font-black">{money(calcItem.netPay)}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCalcItem(null)}
+                className="rounded-xl bg-white text-orange-600 px-4 py-2 font-bold text-xs hover:bg-orange-50 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </TeacherDialog>
+      )}
+
+      {/* Teacher View Receipt Modal */}
+      {receiptItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-3xl my-8 rounded-3xl bg-white shadow-2xl overflow-hidden text-slate-800 border border-orange-200">
+            {/* Action Bar */}
+            <div className="flex items-center justify-between bg-gradient-to-r from-orange-600 to-orange-500 px-6 py-4 text-white print:hidden">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setReceiptItem(null)}
+                  className="rounded-xl bg-white/20 hover:bg-white/30 px-3 py-1.5 text-xs font-black transition"
+                >
+                  ← Close
+                </button>
+                <span className="font-extrabold text-sm sm:text-base">Salary Payment Receipt</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-white text-orange-600 hover:bg-orange-50 px-3.5 py-1.5 text-xs font-black shadow-md transition"
+                >
+                  <AdminIcon name="print" className="h-4 w-4" />
+                  Print / Save PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDownload(receiptItem)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white px-3.5 py-1.5 text-xs font-black transition"
+                >
+                  Download PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReceiptItem(null)}
+                  className="rounded-xl p-1.5 hover:bg-white/20 transition text-white"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Receipt Content */}
+            <div id="salary-receipt-view" className="p-8 space-y-6 bg-white print:p-6 print:border-none">
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-orange-500 pb-5">
+                <div>
+                  <div className="inline-block rounded-xl bg-white p-2 border border-orange-100 shadow-sm">
+                    <img src="/mainlogo.png" alt="My JEE Mentor" className="h-10 w-auto object-contain" />
+                  </div>
+                  <p className="mt-2 text-xs font-bold text-slate-600">
+                    amyjeementor@gmail.com | 7294048814
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    My JEE Mentor • Advanced Learning & Test Preparation Institute
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-block rounded-full bg-emerald-100 px-3 py-1 text-xs font-black uppercase tracking-wider text-emerald-800 mb-1">
+                    ✓ Fully Paid
+                  </span>
+                  <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 uppercase">
+                    Salary Payment Receipt
+                  </h1>
+                  <div className="mt-1 text-xs text-slate-600">
+                    <span>Receipt No: </span>
+                    <strong className="font-mono text-orange-600 font-bold">
+                      {receiptItem.receiptNo || receiptItem.payment?.receiptNo || `MJM-SAL-${new Date().getFullYear()}-001`}
+                    </strong>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    <span>Payment Date: </span>
+                    <strong className="font-medium text-slate-700">
+                      {receiptItem.paidAt ? new Date(`${String(receiptItem.paidAt).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Staff & Payment Details Grid */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4 text-xs">
+                  <h3 className="font-black uppercase tracking-wider text-orange-800 mb-3 flex items-center gap-1.5">
+                    <AdminIcon name="person" className="h-4 w-4 text-orange-600" />
+                    Staff Information
+                  </h3>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Staff Name:</span>
+                      <span className="font-bold text-slate-900">{paymentDetails.accountHolderName || 'Teacher'}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Period:</span>
+                      <span className="font-extrabold text-orange-700">
+                        {new Date(`${String(receiptItem.periodStart).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-slate-500">Status:</span>
+                      <span className="font-bold text-emerald-700">Paid & Settled</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4 text-xs">
+                  <h3 className="font-black uppercase tracking-wider text-orange-800 mb-3 flex items-center gap-1.5">
+                    <AdminIcon name="payment" className="h-4 w-4 text-orange-600" />
+                    Payment Details
+                  </h3>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Method:</span>
+                      <span className="font-extrabold text-emerald-800">{receiptItem.paymentMethod || receiptItem.payment?.paymentMethod || 'Bank Transfer'}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-orange-100/60">
+                      <span className="text-slate-500">Transaction ID (UTR):</span>
+                      <span className="font-mono font-bold text-slate-900">{receiptItem.payment?.transactionId || '—'}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-slate-500">Account / VPA:</span>
+                      <span className="font-mono font-semibold text-slate-800">
+                        {receiptItem.payment?.upiId || receiptItem.payment?.accountMasked || paymentDetails.upiId || paymentDetails.accountMasked || '—'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Breakdown Table */}
+              <div className="overflow-hidden rounded-2xl border border-orange-200 text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-orange-500 text-white font-black uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="p-3">Earnings Particulars</th>
+                      <th className="p-3 text-right">Amount (₹)</th>
+                      <th className="p-3">Deductions</th>
+                      <th className="p-3 text-right">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-orange-100">
+                    <tr>
+                      <td className="p-3 font-bold text-slate-800">Base Compensation</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{money(receiptItem.grossPay)}</td>
+                      <td className="p-3 font-bold text-slate-800">Total Deductions</td>
+                      <td className="p-3 text-right font-bold text-rose-700">{money(receiptItem.deductions)}</td>
+                    </tr>
+                    <tr className="bg-orange-50/60 font-black">
+                      <td className="p-3 uppercase text-slate-900">Gross Total</td>
+                      <td className="p-3 text-right text-slate-900">{money(receiptItem.grossPay)}</td>
+                      <td className="p-3 uppercase text-rose-800">Total Deductions</td>
+                      <td className="p-3 text-right text-rose-800">{money(receiptItem.deductions)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Net Banner */}
+              <div className="rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 p-5 text-white flex flex-wrap items-center justify-between gap-4 shadow-md">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-orange-100">Net Salary Paid</span>
+                  <h2 className="text-2xl sm:text-3xl font-black mt-0.5 tracking-tight">{money(receiptItem.netPay)}</h2>
+                </div>
+                <div className="flex items-center gap-2 rounded-2xl bg-white/20 backdrop-blur-sm px-4 py-2 text-white border border-white/30">
+                  <AdminIcon name="check" className="h-6 w-6 text-emerald-300" />
+                  <div className="text-left">
+                    <div className="text-xs font-black uppercase tracking-wider">Settlement Confirmed</div>
+                    <div className="text-[10px] text-orange-100">Disbursed on {receiptItem.paidAt ? String(receiptItem.paidAt).slice(0, 10) : '—'}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatures */}
+              <div className="pt-8 grid grid-cols-2 gap-8 text-center text-xs">
+                <div>
+                  <div className="border-b border-slate-300 pb-12 font-bold text-slate-400">
+                    {paymentDetails.accountHolderName || 'Staff Member'}
+                  </div>
+                  <p className="mt-2 font-bold text-slate-700">Staff / Employee Signature</p>
+                </div>
+                <div>
+                  <div className="border-b border-slate-300 pb-12 flex items-end justify-center">
+                    <span className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-1 font-mono text-[10px] font-black text-orange-800 uppercase tracking-widest">
+                      My JEE Mentor • Official Seal
+                    </span>
+                  </div>
+                  <p className="mt-2 font-bold text-slate-700">Authorised Signatory</p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-3 text-center text-[10px] text-slate-400">
+                This is a computer-generated salary payment receipt from My JEE Mentor. No physical signature is required.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 function TeacherDialog({title,close,children}:{title:string;close:()=>void;children:ReactNode}) { const [closing,setClosing]=useState(false);const timer=useRef<number|null>(null);useEffect(()=>()=>{if(timer.current!==null)window.clearTimeout(timer.current);},[]);const requestClose=()=>{setClosing(true);timer.current=window.setTimeout(close,160);};return <div className={`teacher-dialog fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 ${closing?'teacher-dialog-closing':''}`} role="dialog" aria-modal="true"><section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><header className="flex items-center justify-between bg-blue-700 px-5 py-4 text-white"><h2 className="text-lg font-black">{title}</h2><button onClick={requestClose} aria-label="Close" className="text-2xl leading-none">×</button></header><div className="p-5">{children}</div></section></div> }
 function LookupSelect({name,label,items,required=true}:{name:string;label:string;items:Array<{id:string;name:string}>;required?:boolean}) { return <label className="text-xs font-black text-slate-600">{label}<select name={name} required={required} className={`${inputClass} mt-1.5 normal-case font-normal`}><option value="">Select…</option>{items.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label> }
 function HomeworkForm({context,busy,onSubmit}:{context:TeacherContext|null;busy:boolean;onSubmit:(value:Row)=>void}) { const [batch,setBatch]=useState('');return <form className="grid gap-4 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);onSubmit({title:f.get('title'),batchId:f.get('batchId'),subjectId:f.get('subjectId'),type:f.get('type'),maxMarks:f.get('maxMarks'),dueDate:f.get('dueDate'),description:f.get('description'),allowLate:f.get('allowLate')==='on'});}}><label className="text-xs font-black text-slate-600 sm:col-span-2">TITLE*<input name="title" required maxLength={180} className={`${inputClass} mt-1.5`}/></label><label className="text-xs font-black text-slate-600">BATCH*<select name="batchId" required value={batch} onChange={e=>setBatch(e.target.value)} className={`${inputClass} mt-1.5`}><option value="">Select batch</option>{context?.batches.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="text-xs font-black text-slate-600">SUBJECT*<select name="subjectId" required className={`${inputClass} mt-1.5`}><option value="">Select subject</option>{context?.subjects.filter(item=>!item.batchId||item.batchId===batch).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="text-xs font-black text-slate-600">TYPE<select name="type" className={`${inputClass} mt-1.5`}><option>Homework</option><option>Assignment</option><option>Practice</option></select></label><label className="text-xs font-black text-slate-600">MAX MARKS<input name="maxMarks" type="number" min="1" defaultValue="10" className={`${inputClass} mt-1.5`}/></label><label className="text-xs font-black text-slate-600">DUE DATE<input name="dueDate" type="date" required className={`${inputClass} mt-1.5`}/></label><label className="flex items-center gap-2 self-end text-sm"><input name="allowLate" type="checkbox" className="accent-blue-600"/>Allow late submissions</label><label className="text-xs font-black text-slate-600 sm:col-span-2">DESCRIPTION<textarea name="description" className={`${inputClass} mt-1.5 min-h-20`}/></label><div className="flex justify-end sm:col-span-2"><button disabled={busy||!context?.batches.length} className={buttonClass}>{busy?'Assigning…':'Assign'}</button></div></form> }
