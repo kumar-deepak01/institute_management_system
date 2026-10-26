@@ -385,7 +385,7 @@ async function loadStaffAttendance(period) {
     try {
       const result = await queryWithLimit(() => getPool().query(`select staff_id,work_date,record_json,minutes,status record_status
         from public.payroll_work_records
-        where staff_id=any($1::text[]) and record_kind='attendance' and source='manual' and work_date between $2::date and $3::date
+        where staff_id=any($1::text[]) and record_kind='attendance' and source in ('manual','zoom','online','auto') and work_date between $2::date and $3::date
         order by staff_id,work_date`, [staffIds, period.start, period.end]));
       attendanceRows = result.rows || [];
     } catch (error) { log(endpoint, 'load attendance work records', error); if (isRequiredPayrollTableMissing(error)) schemaPending = true; }
@@ -468,6 +468,597 @@ async function saveStaffAttendance(req, res, auth, date) {
   } finally { client.release(); }
 }
 
+
+
+async function handleDayRegister(req, res, url) {
+  const endpoint = '/api/admin/payroll/staff-attendance/day-register';
+  try {
+    const todayIstStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const rawDate = clean(url.searchParams.get('date'), 10);
+    const date = dateOk(rawDate) ? rawDate : todayIstStr;
+
+    const [teachersRes, classesRes, assignmentsRes, pwrRes, datesRes] = await Promise.all([
+      queryWithLimit(() => getPool().query(`
+        select s.id, s.staff_key, s.employee_id, s.name, s.email, s.staff_type, s.role, s.employment_type
+        from public.staff s
+        where lower(coalesce(s.status,'active')) not in ('inactive','left','terminated','archived')
+        order by lower(coalesce(s.name,'')), s.id
+      `)),
+      queryWithLimit(() => getPool().query(`
+        select
+          lc.id, lc.title, lc.topic, lc.teacher_key, lc.batch_id,
+          coalesce(b.name, 'All Batches') as batch_name,
+          lc.subject_id, coalesce(s.name, lc.title, 'Class') as subject_name,
+          lc.scheduled_at, coalesce(lc.duration_minutes, 60) as duration_minutes,
+          lc.recurring_daily,
+          tcj.id as join_id, tcj.joined_at, tcj.status as join_status, tcj.staff_id as join_staff_id
+        from public.live_classes lc
+        left join public.batches b on b.id = lc.batch_id
+        left join public.subjects s on s.id = lc.subject_id
+        left join public.teacher_class_joins tcj on tcj.class_id = lc.id and tcj.attendance_date = $1::date
+        where (
+          coalesce((lc.scheduled_at at time zone 'Asia/Kolkata')::date, lc.scheduled_at::date) = $1::date
+          or lc.recurring_daily = true
+        )
+        and lower(coalesce(lc.status, 'scheduled')) not in ('cancelled', 'deleted')
+        order by coalesce(to_char(lc.scheduled_at at time zone 'Asia/Kolkata', 'HH24:MI'), '00:00') asc, lc.id
+      `, [date])),
+      queryWithLimit(() => getPool().query(`select staff_id, batch_id, subject_id from public.staff_subject_assignments`)),
+      queryWithLimit(() => getPool().query(`
+        select staff_id, record_kind, source, minutes, record_json, status, created_at
+        from public.payroll_work_records
+        where work_date = $1::date
+      `, [date])),
+      queryWithLimit(() => getPool().query(`
+        select distinct d::text as dt from (
+          select (scheduled_at at time zone 'Asia/Kolkata')::date as d from public.live_classes where scheduled_at is not null
+          union
+          select attendance_date as d from public.teacher_class_joins
+          union
+          select current_date as d
+        ) t order by dt desc limit 30
+      `))
+    ]);
+
+    const now = new Date();
+    const classesList = classesRes.rows || [];
+    const assignments = assignmentsRes.rows || [];
+    const pwrList = pwrRes.rows || [];
+
+    let teachersScheduledCount = 0;
+    let presentCount = 0;
+    let lateCount = 0;
+    let absentCount = 0;
+    let totalClassesScheduled = 0;
+    let totalClassesTaken = 0;
+    let totalTeachingMinutes = 0;
+
+    const records = teachersRes.rows.map(teacher => {
+      const tStaffKey = String(teacher.staff_key || '');
+      const tId = String(teacher.id);
+
+      const teacherClasses = classesList.filter(c => {
+        if (c.teacher_key && (c.teacher_key === tId || c.teacher_key === tStaffKey)) return true;
+        if (c.join_staff_id && c.join_staff_id === tId) return true;
+        return assignments.some(a => a.staff_id === tId && a.batch_id === c.batch_id && (!c.subject_id || a.subject_id === c.subject_id));
+      });
+
+      const hasClasses = teacherClasses.length > 0;
+      if (hasClasses) teachersScheduledCount++;
+      totalClassesScheduled += teacherClasses.length;
+
+      let earliestJoin = '';
+      let latestEnd = '';
+
+      const classItems = teacherClasses.map(c => {
+        const duration = Number(c.duration_minutes || 60);
+        let startDt = new Date(c.scheduled_at);
+        if (c.recurring_daily) {
+          const timePart = new Date(c.scheduled_at).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
+          startDt = new Date(`${date}T${timePart}+05:30`);
+        }
+        const endDt = new Date(startDt.getTime() + duration * 60 * 1000);
+        const schedTimeStr = startDt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+
+        let status = 'upcoming';
+        let statusText = 'Scheduled, not started';
+        const joinStatus = c.join_status || '';
+
+        if (c.join_id) {
+          status = 'marked';
+          totalClassesTaken++;
+          totalTeachingMinutes += duration;
+          const joinedTimeStr = new Date(c.joined_at).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+          if (!earliestJoin) earliestJoin = joinedTimeStr;
+          latestEnd = endDt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+          statusText = joinStatus === 'Late'
+            ? `Joined ${joinedTimeStr} (Late) • ${duration} min`
+            : `Joined ${joinedTimeStr} • ${duration} min`;
+        } else if (now.getTime() > endDt.getTime()) {
+          status = 'missed';
+          statusText = 'Did not take this class';
+        }
+
+        return {
+          id: c.id,
+          subject: c.subject_name || c.title,
+          batch: c.batch_name,
+          scheduledTime: schedTimeStr,
+          durationMinutes: duration,
+          status,
+          statusText,
+          joinStatus
+        };
+      });
+
+      const manualRecord = pwrList.find(r => r.staff_id === tId && r.record_kind === 'attendance' && r.source === 'manual');
+      const zoomRecord = pwrList.find(r => r.staff_id === tId && r.record_kind === 'attendance' && r.source === 'zoom');
+
+      let status = 'No class';
+      let checkIn = '—';
+      let checkOut = '—';
+      let hoursStr = '—';
+      let isEdited = false;
+      let editedBy = '';
+      let editedAt = '';
+      let editReason = '';
+
+      if (manualRecord) {
+        isEdited = true;
+        const mJson = manualRecord.record_json || {};
+        editedBy = mJson.editedBy || 'Admin';
+        editedAt = mJson.editedAt || manualRecord.created_at;
+        editReason = mJson.reason || '';
+        const rawStatus = clean(mJson.attendanceStatus || 'present').toLowerCase();
+        status = rawStatus === 'present' ? 'Present' : rawStatus === 'late' ? 'Late' : rawStatus === 'holiday' ? 'Holiday' : 'Absent';
+        checkIn = mJson.checkIn || '—';
+        checkOut = mJson.checkOut || '—';
+        hoursStr = Number(manualRecord.minutes || 0) > 0 ? `${(Number(manualRecord.minutes || 0) / 60).toFixed(1)} h` : '—';
+      } else if (hasClasses) {
+        const takenCount = classItems.filter(c => c.status === 'marked').length;
+        const missedCount = classItems.filter(c => c.status === 'missed').length;
+        const upcomingCount = classItems.filter(c => c.status === 'upcoming').length;
+
+        if (takenCount > 0) {
+          const hadLate = classItems.some(c => c.status === 'marked' && c.joinStatus === 'Late');
+          status = hadLate ? 'Late' : 'Present';
+          const zJson = zoomRecord?.record_json || {};
+          checkIn = zJson.checkIn || earliestJoin || '—';
+          checkOut = zJson.checkOut || latestEnd || '—';
+          const takenMins = classItems.filter(c => c.status === 'marked').reduce((sum, c) => sum + c.durationMinutes, 0);
+          hoursStr = `${(takenMins / 60).toFixed(1)} h`;
+        } else if (upcomingCount > 0) {
+          status = 'Upcoming';
+        } else if (missedCount > 0) {
+          status = 'Absent';
+        }
+      }
+
+      if (status === 'Present') presentCount++;
+      else if (status === 'Late') lateCount++;
+      else if (status === 'Absent' && hasClasses) absentCount++;
+
+      return {
+        id: tId,
+        name: teacher.name,
+        employeeId: teacher.employee_id || '—',
+        staffType: teacher.staff_type || teacher.role || 'Teacher',
+        employmentModel: teacher.employment_type || 'Per class',
+        hasClasses,
+        classes: classItems,
+        checkIn,
+        checkOut,
+        hours: hoursStr,
+        status,
+        isEdited,
+        editedBy,
+        editedAt,
+        editReason
+      };
+    });
+
+    const availableDates = datesRes.rows.map(r => {
+      const dStr = r.dt;
+      const dt = new Date(`${dStr}T00:00:00`);
+      const label = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(dt);
+      return { date: dStr, label };
+    });
+
+    const todayDate = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${todayIstStr}T00:00:00`));
+    const formattedDate = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${date}T00:00:00`));
+
+    return send(res, 200, {
+      date,
+      formattedDate,
+      todayDate,
+      kpis: {
+        teachersScheduled: teachersScheduledCount,
+        present: presentCount,
+        late: lateCount,
+        absent: absentCount,
+        classesTaken: `${totalClassesTaken}/${totalClassesScheduled}`,
+        teachingHours: `${(totalTeachingMinutes / 60).toFixed(1)} h`
+      },
+      records,
+      availableDates
+    });
+  } catch (error) {
+    log(endpoint, 'handleDayRegister', error);
+    return send(res, 500, { error: 'Failed to load day register.' });
+  }
+}
+
+async function handleOverrideAttendance(req, res, auth) {
+  const endpoint = '/api/admin/payroll/staff-attendance/override';
+  const data = await input(req, res, auth);
+  if (!data) return;
+
+  const staffId = clean(data.staffId, 120);
+  const date = clean(data.date, 10);
+  const rawStatus = clean(data.status, 20).toLowerCase();
+  const checkIn = clean(data.checkIn, 10);
+  const checkOut = clean(data.checkOut, 10);
+  const reason = clean(data.reason, 300);
+
+  const allowedStatuses = ['present', 'late', 'absent', 'holiday'];
+  if (!staffId || !dateOk(date) || !allowedStatuses.includes(rawStatus)) {
+    return send(res, 400, { error: 'Provide staff ID, valid date and status (present, late, absent, holiday).' });
+  }
+
+  let minutes = 0;
+  if (/^([01]\d|2[0-3]):[0-5]\d$/.test(checkIn) && /^([01]\d|2[0-3]):[0-5]\d$/.test(checkOut)) {
+    minutes = Number(checkOut.slice(0, 2)) * 60 + Number(checkOut.slice(3)) - Number(checkIn.slice(0, 2)) * 60 - Number(checkIn.slice(3));
+    if (minutes < 0) minutes += 1440;
+  } else if (rawStatus === 'present' || rawStatus === 'late') {
+    minutes = 60;
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query('begin');
+
+    const actorName = clean(auth.account.name || auth.account.email || 'Admin', 120);
+
+    await client.query(`
+      with staff_check as (
+        select id, name, employee_id from public.staff where id = $1
+      )
+      insert into public.payroll_work_records(
+        id, staff_id, work_date, record_kind, source, verification_status, status, minutes, payable_minutes, record_json, created_by
+      )
+      select
+        gen_random_uuid()::text, sc.id, $2::date, 'attendance', 'manual', 'verified', 'approved', $3, $3,
+        jsonb_build_object(
+          'attendanceStatus', $4::text,
+          'checkIn', $5::text,
+          'checkOut', $6::text,
+          'reason', $7::text,
+          'editedBy', $8::text,
+          'editedAt', now()
+        ),
+        $9
+      from staff_check sc
+      on conflict (staff_id, work_date) where record_kind = 'attendance' and source = 'manual'
+      do update set
+        verification_status = 'verified',
+        status = 'approved',
+        minutes = excluded.minutes,
+        payable_minutes = excluded.payable_minutes,
+        record_json = excluded.record_json,
+        created_by = excluded.created_by
+    `, [staffId, date, minutes, rawStatus, checkIn, checkOut, reason, actorName, auth.account.id]);
+
+    await client.query(`
+      insert into public.payroll_audit_events(id, actor_id, staff_id, event_type, reason, details)
+      values (
+        gen_random_uuid()::text, $1, $2, 'attendance.override', $3,
+        jsonb_build_object('date', $4::text, 'status', $5, 'checkIn', $6, 'checkOut', $7, 'reason', $3, 'editedBy', $8)
+      )
+    `, [auth.account.id, staffId, reason || 'Admin manual override', date, rawStatus, checkIn, checkOut, actorName]);
+
+    await client.query(`
+      update public.payroll_runs r set review_required=true, review_reason='Staff attendance changed by admin override.', updated_at=now()
+      from public.payroll p where p.payroll_run_id=r.id and p.employee_key=$1 and $2::date between r.period_start and r.period_end and r.status in ('draft','approved')
+    `, [staffId, date]);
+
+    await client.query('commit');
+    invalidate();
+    return send(res, 200, { ok: true, message: 'Attendance updated ✓' });
+  } catch (error) {
+    try { await client.query('rollback'); } catch {}
+    log(endpoint, 'handleOverrideAttendance', error);
+    return send(res, 500, { error: 'Failed to update attendance.' });
+  } finally {
+    client.release();
+  }
+}
+
+async function handleTeacherView(req, res, url) {
+  const endpoint = '/api/admin/payroll/staff-attendance/teacher-view';
+  try {
+    const rawStaffId = clean(url.searchParams.get('staffId'), 120);
+    let month = clean(url.searchParams.get('month'), 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      month = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+    }
+
+    const teachersRes = await queryWithLimit(() => getPool().query(`
+      select s.id, s.staff_key, s.employee_id, s.name, s.email, s.staff_type, s.role, s.employment_type
+      from public.staff s
+      where lower(coalesce(s.status,'active')) not in ('inactive','left','terminated','archived')
+      order by lower(coalesce(s.name,'')), s.id
+    `));
+
+    const teachersList = (teachersRes.rows || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      employeeId: t.employee_id || '—',
+      staffType: t.staff_type || t.role || 'Teacher',
+      employmentModel: t.employment_type || 'Per class',
+      email: t.email || ''
+    }));
+
+    const currentStaffId = rawStaffId || teachersList[0]?.id;
+    const teacher = teachersRes.rows.find(t => t.id === currentStaffId) || teachersRes.rows[0];
+    if (!teacher) {
+      return send(res, 200, {
+        teachersList: [],
+        selectedTeacher: null,
+        month,
+        kpis: { classesTaken: '0/0', teachingHours: '0.0 h', presentDays: 0, lateDays: 0, absentDays: 0, attendanceRate: '0%' },
+        calendar: [],
+        batchSubjectSummary: [],
+        classLog: []
+      });
+    }
+
+    const selectedTeacher = {
+      id: teacher.id,
+      name: teacher.name,
+      employeeId: teacher.employee_id || '—',
+      staffType: teacher.staff_type || teacher.role || 'Teacher',
+      employmentModel: teacher.employment_type || 'Per class',
+      email: teacher.email || ''
+    };
+
+    const [yearStr, mStr] = month.split('-');
+    const year = Number(yearStr);
+    const m = Number(mStr);
+    const daysInMonth = new Date(year, m, 0).getDate();
+    const startDate = `${month}-01`;
+    const endDate = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+
+    const [classesRes, joinsRes, pwrRes] = await Promise.all([
+      queryWithLimit(() => getPool().query(`
+        select
+          lc.id, lc.title, lc.teacher_key, lc.batch_id, coalesce(b.name, 'All Batches') as batch_name,
+          lc.subject_id, coalesce(s.name, lc.title, 'Class') as subject_name,
+          lc.scheduled_at, coalesce(lc.duration_minutes, 60) as duration_minutes,
+          lc.recurring_daily
+        from public.live_classes lc
+        left join public.batches b on b.id = lc.batch_id
+        left join public.subjects s on s.id = lc.subject_id
+        where (
+          lc.teacher_key in ($1, $4)
+          or exists (select 1 from public.staff_subject_assignments sa where sa.staff_id = $1 and sa.batch_id = lc.batch_id)
+        )
+        and (
+          (lc.scheduled_at at time zone 'Asia/Kolkata')::date between $2::date and $3::date
+          or lc.recurring_daily = true
+        )
+        and lower(coalesce(lc.status, 'scheduled')) not in ('cancelled', 'deleted')
+      `, [teacher.id, startDate, endDate, teacher.staff_key])),
+      queryWithLimit(() => getPool().query(`
+        select id, class_id, attendance_date, joined_at, duration_minutes, status
+        from public.teacher_class_joins
+        where staff_id = $1 and attendance_date between $2::date and $3::date
+      `, [teacher.id, startDate, endDate])),
+      queryWithLimit(() => getPool().query(`
+        select work_date, record_kind, source, minutes, record_json, status
+        from public.payroll_work_records
+        where staff_id = $1 and work_date between $2::date and $3::date and record_kind = 'attendance'
+      `, [teacher.id, startDate, endDate]))
+    ]);
+
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const now = new Date();
+
+    const joins = joinsRes.rows || [];
+    const rawClasses = classesRes.rows || [];
+    const pwrList = pwrRes.rows || [];
+
+    const joinMap = new Map();
+    for (const j of joins) {
+      const d = String(j.attendance_date).slice(0, 10);
+      joinMap.set(`${j.class_id}_${d}`, j);
+    }
+
+    const classOccurrences = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+      for (const c of rawClasses) {
+        const duration = Number(c.duration_minutes || 60);
+        let match = false;
+        let startDt;
+
+        if (c.recurring_daily) {
+          match = true;
+          const timePart = new Date(c.scheduled_at).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
+          startDt = new Date(`${dateStr}T${timePart}+05:30`);
+        } else {
+          const cDate = new Date(c.scheduled_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+          if (cDate === dateStr) {
+            match = true;
+            startDt = new Date(c.scheduled_at);
+          }
+        }
+
+        if (match && startDt) {
+          const endDt = new Date(startDt.getTime() + duration * 60 * 1000);
+          const joinKey = `${c.id}_${dateStr}`;
+          const joinRecord = joinMap.get(joinKey);
+
+          let status = 'Upcoming';
+          let joinedTime = '—';
+          if (joinRecord) {
+            status = joinRecord.status === 'Late' ? 'Late' : 'Taken';
+            joinedTime = new Date(joinRecord.joined_at).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+          } else if (now.getTime() > endDt.getTime()) {
+            status = 'Missed';
+          }
+
+          const dtFormatted = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${dateStr}T00:00:00`));
+          const schedTime = startDt.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
+
+          classOccurrences.push({
+            id: `${c.id}_${dateStr}`,
+            classId: c.id,
+            rawDate: dateStr,
+            date: dtFormatted,
+            batch: c.batch_name,
+            subject: c.subject_name || c.title,
+            scheduledTime: schedTime,
+            startTs: startDt.getTime(),
+            joinedTime,
+            duration: `${duration} min`,
+            durationMinutes: duration,
+            status
+          });
+        }
+      }
+    }
+
+    classOccurrences.sort((a, b) => b.startTs - a.startTs);
+
+    const occurrencesByDay = new Map();
+    for (const occ of classOccurrences) {
+      if (!occurrencesByDay.has(occ.rawDate)) occurrencesByDay.set(occ.rawDate, []);
+      occurrencesByDay.get(occ.rawDate).push(occ);
+    }
+
+    const calendarDays = [];
+    let monthTaken = 0;
+    let monthScheduled = 0;
+    let monthTeachingMins = 0;
+    const presentDaysSet = new Set();
+    const lateDaysSet = new Set();
+    const absentDaysSet = new Set();
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+      const dt = new Date(`${dateStr}T00:00:00`);
+      const weekday = dt.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayOccurrences = occurrencesByDay.get(dateStr) || [];
+      const pwr = pwrList.find(p => String(p.work_date).slice(0, 10) === dateStr);
+
+      const scheduledCount = dayOccurrences.length;
+      const takenCount = dayOccurrences.filter(o => o.status === 'Taken' || o.status === 'Late').length;
+      const lateCount = dayOccurrences.filter(o => o.status === 'Late').length;
+      const missedCount = dayOccurrences.filter(o => o.status === 'Missed').length;
+
+      monthTaken += takenCount;
+      monthScheduled += scheduledCount;
+      for (const o of dayOccurrences.filter(x => x.status === 'Taken' || x.status === 'Late')) {
+        monthTeachingMins += o.durationMinutes;
+      }
+
+      let color = 'grey';
+      let statusText = 'No class';
+
+      if (dateStr > todayStr) {
+        color = 'muted';
+        statusText = scheduledCount > 0 ? 'Upcoming' : 'No class';
+      } else if (scheduledCount > 0) {
+        if (takenCount === scheduledCount) {
+          if (lateCount > 0) {
+            color = 'amber';
+            statusText = 'Late';
+            lateDaysSet.add(dateStr);
+          } else {
+            color = 'green';
+            statusText = 'Present';
+            presentDaysSet.add(dateStr);
+          }
+        } else if (takenCount > 0) {
+          color = 'amber';
+          statusText = 'Partial';
+          presentDaysSet.add(dateStr);
+        } else {
+          color = 'red';
+          statusText = 'Missed';
+          absentDaysSet.add(dateStr);
+        }
+      } else if (pwr) {
+        const pStatus = pwr.record_json?.attendanceStatus;
+        if (pStatus === 'present') { color = 'green'; statusText = 'Present'; presentDaysSet.add(dateStr); }
+        else if (pStatus === 'late') { color = 'amber'; statusText = 'Late'; lateDaysSet.add(dateStr); }
+        else if (pStatus === 'absent') { color = 'red'; statusText = 'Absent'; absentDaysSet.add(dateStr); }
+      }
+
+      calendarDays.push({
+        date: dateStr,
+        day,
+        weekday,
+        taken: takenCount,
+        scheduled: scheduledCount,
+        color,
+        status: statusText
+      });
+    }
+
+    const summaryMap = new Map();
+    for (const occ of classOccurrences) {
+      const key = `${occ.batch}:::${occ.subject}`;
+      if (!summaryMap.has(key)) {
+        summaryMap.set(key, { batchName: occ.batch, subjectName: occ.subject, taken: 0, missed: 0, minutes: 0 });
+      }
+      const item = summaryMap.get(key);
+      if (occ.status === 'Taken' || occ.status === 'Late') {
+        item.taken++;
+        item.minutes += occ.durationMinutes;
+      } else if (occ.status === 'Missed') {
+        item.missed++;
+      }
+    }
+
+    const batchSubjectSummary = Array.from(summaryMap.values()).map(item => ({
+      batchName: item.batchName,
+      subjectName: item.subjectName,
+      taken: item.taken,
+      missed: item.missed,
+      hours: `${(item.minutes / 60).toFixed(1)} h`
+    }));
+
+    const presentDays = presentDaysSet.size;
+    const lateDays = lateDaysSet.size;
+    const absentDays = absentDaysSet.size;
+    const totalActiveDays = presentDays + lateDays + absentDays;
+    const attendanceRate = totalActiveDays > 0 ? Math.round(((presentDays + lateDays) / totalActiveDays) * 100) : (monthTaken > 0 ? 100 : 0);
+
+    const kpis = {
+      classesTaken: `${monthTaken}/${monthScheduled}`,
+      teachingHours: `${(monthTeachingMins / 60).toFixed(1)} h`,
+      presentDays,
+      lateDays,
+      absentDays,
+      attendanceRate: `${attendanceRate}%`
+    };
+
+    return send(res, 200, {
+      teachersList,
+      selectedTeacher,
+      month,
+      kpis,
+      calendar: calendarDays,
+      batchSubjectSummary,
+      classLog: classOccurrences
+    });
+  } catch (error) {
+    log(endpoint, 'handleTeacherView', error);
+    return send(res, 500, { error: 'Failed to load teacher view.' });
+  }
+}
+
 async function handlePayrollRoute(req, res, url) {
   const pathname = url.pathname;
   if (pathname === '/api/webhooks/zoom' && req.method === 'POST') return handleZoomWebhook(req, res);
@@ -477,6 +1068,15 @@ async function handlePayrollRoute(req, res, url) {
   if (auth.error) return send(res, auth.status, { error: auth.error });
   const period = periodFrom(url);
   try {
+    if (req.method === 'GET' && pathname === '/api/admin/payroll/staff-attendance/day-register') {
+      return await handleDayRegister(req, res, url);
+    }
+    if (req.method === 'POST' && pathname === '/api/admin/payroll/staff-attendance/override') {
+      return await handleOverrideAttendance(req, res, auth);
+    }
+    if (req.method === 'GET' && pathname === '/api/admin/payroll/staff-attendance/teacher-view') {
+      return await handleTeacherView(req, res, url);
+    }
     if (req.method === 'GET' && pathname === '/api/admin/payroll/staff-attendance') {
       try { const value = await loadStaffAttendance(period); return send(res, 200, value); }
       catch (error) { if (!isRequiredPayrollTableMissing(error)) throw error; log(pathname, 'load attendance and staff roster', error); return send(res, 200, { period, workdays: countWorkingDays(period), staff: [], stats: { totalStaff: 0, avgAttendance: 0, lateCheckIns: 0, overtimeHours: 0 }, schemaPending: true }); }

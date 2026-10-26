@@ -45,3 +45,122 @@ export async function staffAttendanceGet(month: number, year: number): Promise<S
 export async function staffAttendanceSave(date: string, records: Array<{ staffId: string; status: StaffAttendanceStatus; checkIn: string; checkOut: string; overtimeMinutes: number }>) {
   return payrollWrite<{ saved: number; date: string }>(`/staff-attendance?date=${encodeURIComponent(date)}`, 'POST', { records });
 }
+
+export interface StaffClassItem {
+  id: string;
+  subject: string;
+  batch: string;
+  scheduledTime: string;
+  durationMinutes: number;
+  status: 'marked' | 'missed' | 'upcoming';
+  statusText: string;
+  joinStatus?: string;
+}
+
+export interface DayRegisterTeacherRecord {
+  id: string;
+  name: string;
+  employeeId: string;
+  staffType: string;
+  employmentModel: string;
+  hasClasses: boolean;
+  classes: StaffClassItem[];
+  checkIn: string;
+  checkOut: string;
+  hours: string;
+  status: 'Present' | 'Late' | 'Absent' | 'Upcoming' | 'Holiday' | 'No class';
+  isEdited: boolean;
+  editedBy?: string;
+  editedAt?: string;
+  editReason?: string;
+}
+
+export interface DayRegisterData {
+  date: string;
+  formattedDate: string;
+  todayDate: string;
+  kpis: {
+    teachersScheduled: number;
+    present: number;
+    late: number;
+    absent: number;
+    classesTaken: string;
+    teachingHours: string;
+  };
+  records: DayRegisterTeacherRecord[];
+  availableDates: Array<{ date: string; label: string }>;
+}
+
+export interface TeacherViewTeacherItem {
+  id: string;
+  name: string;
+  employeeId: string;
+  staffType: string;
+  employmentModel: string;
+  email: string;
+}
+
+export interface TeacherCalendarDay {
+  date: string;
+  day: number;
+  weekday: string;
+  taken: number;
+  scheduled: number;
+  color: 'green' | 'amber' | 'red' | 'grey' | 'muted';
+  status: string;
+}
+
+export interface TeacherBatchSubjectSummary {
+  batchName: string;
+  subjectName: string;
+  taken: number;
+  missed: number;
+  hours: string;
+}
+
+export interface TeacherClassLogItem {
+  id: string;
+  classId: string;
+  rawDate: string;
+  date: string;
+  batch: string;
+  subject: string;
+  scheduledTime: string;
+  joinedTime: string;
+  duration: string;
+  durationMinutes: number;
+  status: 'Taken' | 'Late' | 'Missed' | 'Upcoming';
+}
+
+export interface TeacherViewData {
+  teachersList: TeacherViewTeacherItem[];
+  selectedTeacher: TeacherViewTeacherItem | null;
+  month: string;
+  kpis: {
+    classesTaken: string;
+    teachingHours: string;
+    presentDays: number;
+    lateDays: number;
+    absentDays: number;
+    attendanceRate: string;
+  };
+  calendar: TeacherCalendarDay[];
+  batchSubjectSummary: TeacherBatchSubjectSummary[];
+  classLog: TeacherClassLogItem[];
+}
+
+export async function fetchStaffAttendanceDayRegister(date?: string): Promise<DayRegisterData> {
+  return payrollGet<DayRegisterData>(`/staff-attendance/day-register${date ? `?date=${encodeURIComponent(date)}` : ''}`);
+}
+
+export async function overrideStaffAttendance(payload: { staffId: string; date: string; status: string; checkIn?: string; checkOut?: string; reason?: string }): Promise<{ ok: boolean; message: string }> {
+  return payrollWrite<{ ok: boolean; message: string }>('/staff-attendance/override', 'POST', payload);
+}
+
+export async function fetchStaffAttendanceTeacherView(staffId?: string, month?: string): Promise<TeacherViewData> {
+  const params = new URLSearchParams();
+  if (staffId) params.set('staffId', staffId);
+  if (month) params.set('month', month);
+  const q = params.toString();
+  return payrollGet<TeacherViewData>(`/staff-attendance/teacher-view${q ? `?${q}` : ''}`);
+}

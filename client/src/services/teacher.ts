@@ -25,3 +25,34 @@ export async function fetchTeacherPayslip(id: string) {
   if (!response.ok) throw new Error('Payslip could not be downloaded.');
   return response.blob();
 }
+
+export async function takeTeacherClass(classId: string, date?: string) {
+  return saveTeacherPage<{ ok: boolean; message: string; subject: string; batchName: string; time: string; status: string; hostUrl: string }>(
+    `classes/${encodeURIComponent(classId)}/take`,
+    'POST',
+    { date }
+  );
+}
+
+export async function fetchTeacherMyAttendance(month?: string) {
+  return getTeacherPage<{
+    month: string;
+    days: Array<{
+      date: string;
+      day: string;
+      status: string;
+      classesTaken: number;
+      classes: Array<{ id: string; title: string; subject: string; batch: string; durationMinutes: number; joinedAt: string; status: string }>;
+      checkIn: string;
+      checkOut: string;
+      teachingMinutes: number;
+      teachingHours: number;
+    }>;
+    stats: {
+      daysPresent: number;
+      classesTaken: number;
+      teachingHours: number;
+      attendanceRate: number;
+    };
+  }>('my-attendance', month ? `?month=${encodeURIComponent(month)}` : '');
+}

@@ -4,7 +4,7 @@ import { HelmetProvider } from 'react-helmet-async';
 import AdminIcon from '../components/AdminIcon';
 import PtmMeetingNotices from '../components/PtmMeetingNotices';
 import { currentAccount, logout } from '../services/auth';
-import { deleteTeacherPage, fetchTeacherPayslip, getTeacherContext, getTeacherPage, saveTeacherPage, uploadTeacherFile, type TeacherContext } from '../services/teacher';
+import { deleteTeacherPage, fetchTeacherPayslip, fetchTeacherMyAttendance, getTeacherContext, getTeacherPage, saveTeacherPage, takeTeacherClass, uploadTeacherFile, type TeacherContext } from '../services/teacher';
 import { AnimatedCount, MagneticButton, TiltCard } from './TeacherEffects';
 import TeacherPageHead from './TeacherPageHead';
 import TeacherBrand from './TeacherBrand';
@@ -16,7 +16,7 @@ type NavItem = { title: string; path: string; icon: string };
 const groups: Array<{ title: string; items: NavItem[] }> = [
   { title: 'OVERVIEW', items: [{ title: 'Dashboard', path: '/teacher/dashboard', icon: 'dashboard' }, { title: 'My Students', path: '/teacher/students', icon: 'student' }] },
   { title: 'TEACHING', items: [{ title: 'My Timetable', path: '/teacher/timetable', icon: 'calendar' }, { title: 'Attendance', path: '/teacher/attendance', icon: 'checklist' }, { title: 'Homework', path: '/teacher/homework', icon: 'pencil' }, { title: 'Exams', path: '/teacher/exams', icon: 'quiz' }, { title: 'Results', path: '/teacher/results', icon: 'report' }, { title: 'Shared Files', path: '/teacher/shared-files', icon: 'download' }] },
-  { title: 'ACCOUNT', items: [{ title: 'My Profile', path: '/teacher/profile', icon: 'person' }, { title: 'Leave & Holidays', path: '/teacher/leave', icon: 'eventOff' }, { title: 'My Payments', path: '/teacher/payslips', icon: 'payment' }] },
+  { title: 'ACCOUNT', items: [{ title: 'My Profile', path: '/teacher/profile', icon: 'person' }, { title: 'My Attendance', path: '/teacher/my-attendance', icon: 'checklist' }, { title: 'Leave & Holidays', path: '/teacher/leave', icon: 'eventOff' }, { title: 'My Payments', path: '/teacher/payslips', icon: 'payment' }] },
 ];
 const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100';
 const buttonClass = 'inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50';
@@ -56,6 +56,9 @@ function TeacherWorkspace() {
   const [attendanceDate, setAttendanceDate] = useState(today());
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [theme, setTheme] = useState<TeacherThemeMode>(getInitialTeacherTheme);
+  const [myAttendanceMonth, setMyAttendanceMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [takingId, setTakingId] = useState('');
+  const [takeClassModal, setTakeClassModal] = useState<{ show: boolean; subject: string; batchName: string; time: string; hostUrl: string } | null>(null);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -94,12 +97,13 @@ function TeacherWorkspace() {
       let result: Row;
       if (page === 'attendance') result = await getTeacherPage<Row>('attendance', `?batchId=${encodeURIComponent(attendanceBatch)}&date=${encodeURIComponent(attendanceDate)}`);
       else if (page === 'students') result = await getTeacherPage<Row>('students', appliedQuery ? `?q=${encodeURIComponent(appliedQuery)}` : '');
+      else if (page === 'my-attendance') result = await fetchTeacherMyAttendance(myAttendanceMonth);
       else result = await getTeacherPage<Row>(page);
       setData(result || {});
       if (page === 'attendance') setAttendance(Object.fromEntries((result.records || []).map((row: Row) => [row.studentKey, row.status || 'Absent'])));
     } catch (cause) { setError(cause instanceof Error ? cause.message : `${titleFor(page)} could not be loaded.`); setData({}); }
     finally { setLoading(false); }
-  }, [page, context, attendanceBatch, attendanceDate, appliedQuery]);
+  }, [page, context, attendanceBatch, attendanceDate, appliedQuery, myAttendanceMonth]);
   useEffect(() => { void loadPage(); }, [loadPage, refresh]);
 
   const go = (path: string) => { navigate(path); setMobileOpen(false); setError(''); setNotice(''); };
@@ -109,6 +113,32 @@ function TeacherWorkspace() {
     try { await task(); setNotice(success); setDialog(''); after?.(); refreshAll(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'This change could not be saved.'); }
     finally { setBusy(false); }
+  };
+
+  const handleTakeClass = async (classItem: Row) => {
+    setTakingId(classItem.id);
+    setError('');
+    try {
+      const res = await takeTeacherClass(classItem.id);
+      setTakeClassModal({
+        show: true,
+        subject: res.subject || classItem.subject || 'Class',
+        batchName: res.batchName || classItem.batchName || 'All Batches',
+        time: res.time || new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+        hostUrl: res.hostUrl || classItem.hostUrl || ''
+      });
+      void getTeacherPage<Row>('dashboard').then(setDashboard).catch(() => {});
+      setTimeout(() => {
+        if (res.hostUrl) {
+          window.open(res.hostUrl, '_blank', 'noopener,noreferrer');
+        }
+        setTakeClassModal(null);
+      }, 2500);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not mark class attendance.');
+    } finally {
+      setTakingId('');
+    }
   };
   const filteredGroups = useMemo(() => groups.map(group => ({ ...group, items: group.items.filter(item => item.title.toLowerCase().includes(menuSearch.toLowerCase())) })).filter(group => group.items.length), [menuSearch]);
   const pageTitle = titleFor(page);
@@ -129,7 +159,7 @@ function TeacherWorkspace() {
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-[.16em] text-blue-600">{page === 'dashboard' ? 'Teacher Portal' : 'Teacher Workspace'}</p><h2 className="mt-1 text-3xl font-black text-blue-600">{page === 'dashboard' ? `Welcome, ${teacherName}! 🧑‍🏫` : pageTitle}</h2><p className="mt-1 text-sm text-slate-600">{pageSubtitle(page)}</p></div>{page === 'homework' && <MagneticButton onClick={() => { setActiveItem(null); setDialog('homework'); }} className={buttonClass}><AdminIcon name="addPerson" className="h-4 w-4"/>Assign Homework</MagneticButton>}{page === 'exams' && <MagneticButton onClick={() => { setActiveItem(null); setDialog('exam'); }} className={buttonClass}>+ Create Exam</MagneticButton>}{page === 'shared-files' && <MagneticButton onClick={() => setDialog('file')} className={buttonClass}>+ Upload File</MagneticButton>}</div>
         {error && <div role="alert" className="mb-5 flex items-center justify-between gap-4 rounded-2xl border border-rose-200 bg-white px-5 py-4 text-sm text-rose-700">{error}<button className="font-bold underline" onClick={() => { void loadPage(); refreshAll(); }}>Retry</button></div>}
         {notice && <p role="status" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p>}
-        {page === 'dashboard' && <DashboardView loading={loading} dashboard={dashboard} teacherName={teacherName} onNavigate={go}/>}
+        {page === 'dashboard' && <DashboardView loading={loading} dashboard={dashboard} teacherName={teacherName} onNavigate={go} onTakeClass={handleTakeClass} takingId={takingId}/>}
         {page === 'students' && <StudentsView data={data} loading={loading} query={query} setQuery={setQuery} onSearch={() => setAppliedQuery(query)}/>}
         {page === 'timetable' && <TimetableView data={data} loading={loading}/>}
         {page === 'attendance' && <AttendanceView context={context} data={data} loading={loading} batch={attendanceBatch} setBatch={setAttendanceBatch} date={attendanceDate} setDate={setAttendanceDate} attendance={attendance} setAttendance={setAttendance} onSave={() => void perform(() => saveTeacherPage('attendance','POST',{batchId:attendanceBatch,date:attendanceDate,records:Object.entries(attendance).map(([studentKey,status])=>({studentKey,status}))}), 'Attendance saved.', () => void loadPage())} busy={busy}/>}
@@ -140,11 +170,21 @@ function TeacherWorkspace() {
         {page === 'profile' && <ProfileView profile={context?.profile || data.profile || {}} busy={busy} onSave={value => void perform(() => saveTeacherPage('profile','PUT',value), 'Profile changes saved.', refreshAll)} onPassword={value => void perform(() => saveTeacherPage('password','POST',value), 'Password updated.')} />}
         {page === 'leave' && <LeaveView data={data} loading={loading} busy={busy} onApply={value => void perform(() => saveTeacherPage('leave','POST',value), 'Leave request submitted for approval.')}/>}
         {page === 'payslips' && <PayslipView data={data} loading={loading} onDownload={async item => { try { const blob=await fetchTeacherPayslip(item.id),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`payslip-${String(item.periodStart||'period').slice(0,7)}.pdf`;link.click();URL.revokeObjectURL(url); } catch(cause) { setError(cause instanceof Error?cause.message:'Payslip could not be downloaded.'); } }}/ >}
+        {page === 'my-attendance' && <MyAttendanceView data={data} loading={loading} month={myAttendanceMonth} setMonth={setMyAttendanceMonth}/>}
         {page === 'dashboard' && <div className="mt-6"><PtmMeetingNotices /></div>}
       </main>
       <footer className="flex min-h-14 items-center justify-between border-t border-slate-200 bg-white px-5 text-xs text-slate-600"><span>© 2026 My JEE Mentor</span><span>Coach Sutra v3.0</span></footer>
     </div>
     <MagneticButton className="fixed bottom-6 right-6 z-20 grid h-14 w-14 place-items-center rounded-full bg-blue-700 text-white shadow-lg shadow-blue-900/20" aria-label="Open Coach Sutra chat"><AdminIcon name="chat" className="h-6 w-6"/><span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500"/></MagneticButton>
+    {takeClassModal?.show && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 backdrop-blur-sm p-4">
+        <div className="rounded-2xl border-2 border-emerald-600 bg-white p-7 shadow-2xl text-center max-w-sm w-full dark:bg-slate-900">
+          <h3 className="text-lg font-black text-emerald-600 flex items-center justify-center gap-2">Attendance marked <span className="text-xl">✓</span></h3>
+          <p className="mt-1.5 text-sm font-semibold text-slate-700 dark:text-slate-200">{takeClassModal.subject}, {takeClassModal.batchName}, {takeClassModal.time}</p>
+          <p className="mt-3 text-xs text-slate-400">Opening Zoom host link in a moment…</p>
+        </div>
+      </div>
+    )}
     {dialog === 'homework' && <TeacherDialog title="Assign Homework" close={() => setDialog('')}><HomeworkForm context={context} busy={busy} onSubmit={value => void perform(() => saveTeacherPage<{record:Row}>('homework','POST',value), 'Homework assigned.', () => void loadPage())}/></TeacherDialog>}
     {dialog === 'exam' && <TeacherDialog title="Create Exam" close={() => setDialog('')}><ExamForm context={context} busy={busy} onSubmit={value => void perform(() => saveTeacherPage('exams','POST',value), 'Exam created.', () => void loadPage())}/></TeacherDialog>}
     {dialog === 'file' && <TeacherDialog title="Upload Shared File" close={() => setDialog('')}><FileForm context={context} busy={busy} onSubmit={value => void perform(() => uploadTeacherFile(value.file,value.fields), 'File uploaded.', () => void loadPage())}/></TeacherDialog>}
@@ -152,18 +192,294 @@ function TeacherWorkspace() {
   </div>;
 }
 
-function pageSubtitle(page: string) { return ({ dashboard: 'Your classes, students and daily teaching tools in one place.', students: 'Students across all your batches.', timetable: 'Your weekly class schedule.', attendance: 'Mark and review attendance for your assigned batches.', homework: 'Create assignments and review student submissions.', exams: 'Exams you have created for your batches.', results: 'Results from exams in your batches.', 'shared-files': 'Share learning resources with your batches.', profile: 'Manage your personal and professional information.', leave: 'Apply for leave and check the institute holiday calendar.', payslips: 'Download your monthly salary slips.' } as Record<string,string>)[page] || '' }
+function pageSubtitle(page: string) { return ({ dashboard: 'Your classes, students and daily teaching tools in one place.', students: 'Students across all your batches.', timetable: 'Your weekly class schedule.', attendance: 'Mark and review attendance for your assigned batches.', homework: 'Create assignments and review student submissions.', exams: 'Exams you have created for your batches.', results: 'Results from exams in your batches.', 'shared-files': 'Share learning resources with your batches.', profile: 'Manage your personal and professional information.', leave: 'Apply for leave and check the institute holiday calendar.', payslips: 'Download your monthly salary slips.', 'my-attendance': 'Review your personal attendance records and classes taken.' } as Record<string,string>)[page] || '' }
 function Panel({ title, icon, children, action, tilt = true }: { title: string; icon?: string; children: ReactNode; action?: ReactNode; tilt?: boolean }) { const content = <><header className="flex items-center justify-between gap-3 border-b border-blue-100 bg-gradient-to-r from-blue-50 to-indigo-100 px-5 py-3.5"><h2 className="flex items-center gap-2 font-extrabold text-blue-800">{icon && <AdminIcon name={icon} className="h-5 w-5"/>}{title}</h2>{action}</header><div className="p-5">{children}</div></>; return tilt ? <TiltCard as="section" className={panelClass}>{content}</TiltCard> : <section className={`${panelClass} teacher-static-card`}>{content}</section>; }
 function Empty({ title, detail }: { title: string; detail?: string }) { return <div className="grid min-h-44 place-items-center rounded-xl border border-dashed border-blue-200 bg-slate-50/50 p-6 text-center"><div><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-blue-50 text-blue-400"><AdminIcon name="inbox" className="h-6 w-6"/></span><p className="mt-3 font-bold text-slate-700">{title}</p>{detail && <p className="mt-1 text-sm text-slate-500">{detail}</p>}</div></div>; }
 function Metric({ label, value, sub, icon, color = 'blue' }: { label: string; value: ReactNode; sub?: string; icon: string; color?: string }) { const tones:Record<string,string>={blue:'bg-blue-50 text-blue-600',green:'bg-emerald-50 text-emerald-600',amber:'bg-amber-50 text-amber-600',purple:'bg-violet-50 text-violet-600'}; return <TiltCard as="article" className={`${panelClass} flex min-h-28 items-center gap-4 p-4`}><span className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${tones[color]||tones.blue}`}><AdminIcon name={icon} className="h-6 w-6"/></span><div className="min-w-0"><p className="truncate text-[11px] font-black uppercase tracking-[.1em] text-slate-400">{label}</p><p className="mt-1 text-2xl font-black text-slate-900">{value}</p>{sub&&<p className="mt-0.5 truncate text-xs text-slate-500">{sub}</p>}</div></TiltCard>; }
-function DashboardView({loading,dashboard,teacherName,onNavigate}:{loading:boolean;dashboard:Row|null;teacherName:string;onNavigate:(path:string)=>void}) { const stats=dashboard?.stats||{}, classes:Row[]=dashboard?.todayClasses||[], batches:Row[]=dashboard?.batches||[], reviews:Row[]=dashboard?.reviews||[]; return <>
-  <TiltCard className="teacher-welcome-banner mb-5 overflow-hidden rounded-2xl bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-600 p-6 text-white shadow-md sm:p-7"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-black tracking-[.2em] text-blue-100">TEACHER PORTAL</p><h2 className="mt-2 text-2xl font-black">Welcome, {teacherName}! 🧑‍🏫</h2><p className="mt-1 text-sm text-blue-100">{prettyDate(today())}</p></div><div className="flex gap-2"><span className="rounded-full bg-white/15 px-3 py-2 text-xs font-bold"><AnimatedCount value={Number(stats.students||0)}/> My Students</span><span className="rounded-full bg-white/15 px-3 py-2 text-xs font-bold"><AnimatedCount value={Number(stats.batches||0)}/> Batches</span></div></div></TiltCard>
-  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[['MY STUDENTS',stats.students||0,'students','blue'],['BATCHES',stats.batches||0,'briefcase','green'],['PENDING REVIEWS',stats.pendingReviews||0,'checklist','amber'],['CLASS AVG SCORE',`${stats.classAverage||0}%`,'chart','purple']].map(([label,value,icon,color])=><Metric key={String(label)} label={String(label)} value={typeof value === 'number' ? <AnimatedCount value={value}/> : value as ReactNode} icon={String(icon)} color={String(color)}/>)}</div>
-  <div className="mt-5 grid gap-5 xl:grid-cols-2"><Panel title="Batch Performance Comparison" icon="chart">{loading?<Loading/>:batches.length?<div className="space-y-4">{batches.map((batch:Row)=><div key={batch.id}><div className="mb-1 flex justify-between text-sm"><b>{batch.name}</b><span className="text-slate-500">{Number(stats.classAverage||0)}%</span></div><div className="h-3 overflow-hidden rounded-full bg-slate-100"><div className="teacher-animate-bar h-full rounded-full bg-blue-500" style={{width:`${Math.max(0,Math.min(100,Number(stats.classAverage||0)))}%`}}/></div></div>)}</div>:<Empty title="No batch performance yet" detail="Results will appear after your students complete exams."/>}</Panel><Panel title="Homework Evaluation Status" icon="chart">{loading?<Loading/>:<div className="flex flex-wrap items-center justify-center gap-6 py-2"><div className="grid h-36 w-36 place-items-center rounded-full" style={{background:`conic-gradient(#f97316 0deg, #f97316 ${reviews.length?90:0}deg, #e5e7eb ${reviews.length?90:360}deg)`}}><div className="grid h-24 w-24 place-items-center rounded-full bg-white text-center"><b className="text-2xl"><AnimatedCount value={Number(stats.pendingReviews||0)}/></b><small className="text-[10px] uppercase text-slate-400">Pending</small></div></div><div className="grid grid-cols-2 gap-x-7 gap-y-3 text-sm">{[['Assigned',dashboard?.homeworkAssigned||0],['Submitted',dashboard?.homeworkSubmitted||0],['Reviewed',dashboard?.homeworkReviewed||0],['Pending',stats.pendingReviews||0]].map(([label,value])=><p key={String(label)} className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-blue-500"/><span className="text-slate-500">{label}</span><b>{String(value)}</b></p>)}</div></div>}</Panel></div>
-  <div className="mt-5 grid gap-5 xl:grid-cols-2"><Panel title="Today's Classes" icon="calendar" action={<span className="text-xs text-slate-500">{prettyDate(today())}</span>}>{loading?<Loading/>:classes.length?<div className="space-y-3">{classes.map((item:Row)=><article key={item.id} className="flex items-center gap-3 rounded-xl border border-slate-100 p-3"><span className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">{item.startTime||'—'}</span><div className="min-w-0 flex-1"><b className="block truncate text-sm">{item.subject||item.title||'Class'}</b><span className="text-xs text-slate-500">{item.batchName} · {item.room||'Class'}</span></div>{item.hostUrl&&<a href={item.hostUrl} target="_blank" rel="noreferrer" className="text-xs font-bold text-blue-700">Host link</a>}</article>)}<button onClick={()=>onNavigate('/teacher/timetable')} className="text-sm font-bold text-blue-700">View Full Timetable →</button></div>:<Empty title="No classes today" detail="Your scheduled classes will appear here."/>}</Panel><Panel title="My Batches" icon="briefcase">{loading?<Loading/>:batches.length?<div className="grid gap-3 sm:grid-cols-2">{batches.map((batch:Row)=><div key={batch.id} className="rounded-xl border border-blue-100 bg-blue-50/50 p-4"><b>{batch.name}</b><p className="mt-1 text-xs text-slate-500">{batch.courseName||'Assigned batch'}</p></div>)}</div>:<Empty title="No batches assigned" detail="Your institute admin can assign batches to your profile."/>}</Panel></div>
-  <Panel title={`Pending Homework Reviews (${stats.pendingReviews||0})`} icon="checklist" action={<button onClick={()=>onNavigate('/teacher/homework')} className="text-sm font-bold text-blue-700">View all →</button>}><div className="grid gap-3 sm:grid-cols-2">{reviews.map((item:Row)=><div key={item.id} className="rounded-xl border border-slate-100 p-3"><b className="text-sm">{item.title}</b><p className="text-xs text-slate-500">{item.batchName} · {item.pending||0} pending</p></div>)}</div>{!loading&&!reviews.length&&<p className="py-4 text-center text-sm font-semibold text-emerald-700">All homework reviewed!</p>}</Panel>
-  <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Attendance','checklist'],['Homework','pencil'],['Exams','quiz'],['My Students','student']].map(([label,icon])=><MagneticButton key={label} onClick={()=>onNavigate(`/teacher/${String(label).toLowerCase().replace('my students','students')}`)} className="teacher-quick-action flex items-center gap-3 rounded-2xl border border-blue-100 bg-white p-4 text-left font-bold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-600"><AdminIcon name={icon} className="h-5 w-5"/></span>{label}<span className="ml-auto">→</span></MagneticButton>)}</div>
-  </>; }
+function DashboardView({
+  loading,
+  dashboard,
+  teacherName,
+  onNavigate,
+  onTakeClass,
+  takingId
+}: {
+  loading: boolean;
+  dashboard: Row | null;
+  teacherName: string;
+  onNavigate: (path: string) => void;
+  onTakeClass: (item: Row) => void;
+  takingId: string;
+}) {
+  const stats = dashboard?.stats || {};
+  const monthlyStats = dashboard?.monthlyStats || {};
+  const classes: Row[] = dashboard?.todayClasses || [];
+  const batches: Row[] = dashboard?.batches || [];
+  const reviews: Row[] = dashboard?.reviews || [];
+
+  return (
+    <>
+      {/* Today Classes Container */}
+      <section className="mb-6">
+        <h2 className="text-2xl font-black text-[#EA580C] sm:text-3xl">Today Classes</h2>
+        <p className="mt-1 text-xs text-slate-500 sm:text-sm">Scheduled classes of the teacher. Take Class is available here, not on the attendance page.</p>
+
+        <div className="mt-4 rounded-3xl border border-orange-200/90 bg-[#FFFDF9] p-5 shadow-sm sm:p-6 dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-orange-100/70 pb-4 dark:border-slate-800">
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100 sm:text-base">Today classes: {prettyDate(today())}</span>
+            <span className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{teacherName}</span>
+          </div>
+
+          <div className="pt-4 pb-2">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">My scheduled classes today</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Click Take Class to join on Zoom. Attendance is marked automatically.</p>
+          </div>
+
+          <div className="divide-y divide-orange-100/60 dark:divide-slate-800">
+            {loading ? (
+              <div className="py-6"><Loading/></div>
+            ) : classes.length > 0 ? (
+              classes.map((item: Row) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-slate-900 dark:text-slate-100">{item.subject || item.title}</span>
+                      <span className="text-xs font-semibold uppercase text-slate-400">{item.batchName}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-slate-500">{item.startTime || '—'} • {item.durationMinutes} min</p>
+                  </div>
+
+                  <div>
+                    {item.status === 'missed' && (
+                      <span className="inline-flex rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">Missed</span>
+                    )}
+                    {item.status === 'marked' && (
+                      <div className="text-right">
+                        <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">Attendance marked</span>
+                        <p className="mt-0.5 text-[11px] text-slate-500">Joined {item.joinedAt || '10:00 AM'}</p>
+                      </div>
+                    )}
+                    {(item.status === 'upcoming' || (!item.status && !item.isJoined)) && (
+                      <button
+                        type="button"
+                        onClick={() => onTakeClass(item)}
+                        disabled={takingId === item.id}
+                        className="rounded-xl bg-[#EA580C] px-5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#C2410C] active:scale-95 disabled:opacity-50"
+                      >
+                        {takingId === item.id ? 'Joining…' : 'Take Class'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="py-6 text-center text-sm text-slate-500">No scheduled classes for today.</p>
+            )}
+          </div>
+        </div>
+
+        {/* 4 Bottom Metric Cards */}
+        <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-3xl font-black text-[#EA580C]"><AnimatedCount value={Number(monthlyStats.daysPresent ?? 0)}/></p>
+            <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">DAYS PRESENT</p>
+          </div>
+          <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-3xl font-black text-[#EA580C]"><AnimatedCount value={Number(monthlyStats.classesTaken ?? 0)}/></p>
+            <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">CLASSES TAKEN</p>
+          </div>
+          <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-3xl font-black text-[#EA580C]">{Number(monthlyStats.teachingHours ?? 0).toFixed(1)} h</p>
+            <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">TEACHING HOURS</p>
+          </div>
+          <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-3xl font-black text-[#EA580C]">{Number(monthlyStats.attendanceRate ?? 95)}%</p>
+            <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">ATTENDANCE</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Analytics Panels */}
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Panel title="Batch Performance Comparison" icon="chart">
+          {loading ? <Loading/> : batches.length ? (
+            <div className="space-y-4">
+              {batches.map((batch: Row) => (
+                <div key={batch.id}>
+                  <div className="mb-1 flex justify-between text-sm">
+                    <b>{batch.name}</b>
+                    <span className="text-slate-500">{Number(stats.classAverage || 0)}%</span>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                    <div className="teacher-animate-bar h-full rounded-full bg-blue-500" style={{ width: `${Math.max(0, Math.min(100, Number(stats.classAverage || 0)))}%` }}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty title="No batch performance yet" detail="Results will appear after your students complete exams."/>
+          )}
+        </Panel>
+
+        <Panel title="Homework Evaluation Status" icon="chart">
+          {loading ? <Loading/> : (
+            <div className="flex flex-wrap items-center justify-center gap-6 py-2">
+              <div className="grid h-36 w-36 place-items-center rounded-full" style={{ background: `conic-gradient(#f97316 0deg, #f97316 ${reviews.length ? 90 : 0}deg, #e5e7eb ${reviews.length ? 90 : 360}deg)` }}>
+                <div className="grid h-24 w-24 place-items-center rounded-full bg-white text-center dark:bg-slate-900">
+                  <b className="text-2xl"><AnimatedCount value={Number(stats.pendingReviews || 0)}/></b>
+                  <small className="text-[10px] uppercase text-slate-400">Pending</small>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-7 gap-y-3 text-sm">
+                {[['Assigned', dashboard?.homeworkAssigned || 0], ['Submitted', dashboard?.homeworkSubmitted || 0], ['Reviewed', dashboard?.homeworkReviewed || 0], ['Pending', stats.pendingReviews || 0]].map(([label, value]) => (
+                  <p key={String(label)} className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-orange-500"/>
+                    <span className="text-slate-500">{label}</span>
+                    <b>{String(value)}</b>
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      <div className="mt-5">
+        <Panel title={`Pending Homework Reviews (${stats.pendingReviews || 0})`} icon="checklist" action={<button onClick={() => onNavigate('/teacher/homework')} className="text-sm font-bold text-blue-700">View all →</button>}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {reviews.map((item: Row) => (
+              <div key={item.id} className="rounded-xl border border-slate-100 p-3 dark:border-slate-800">
+                <b className="text-sm">{item.title}</b>
+                <p className="text-xs text-slate-500">{item.batchName} · {item.pending || 0} pending</p>
+              </div>
+            ))}
+          </div>
+          {!loading && !reviews.length && <p className="py-4 text-center text-sm font-semibold text-emerald-700">All homework reviewed!</p>}
+        </Panel>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[['Attendance', 'checklist'], ['Homework', 'pencil'], ['Exams', 'quiz'], ['My Students', 'student']].map(([label, icon]) => (
+          <MagneticButton key={label} onClick={() => onNavigate(`/teacher/${String(label).toLowerCase().replace('my students', 'students')}`)} className="teacher-quick-action flex items-center gap-3 rounded-2xl border border-blue-100 bg-white p-4 text-left font-bold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-950/50 dark:text-orange-400">
+              <AdminIcon name={icon} className="h-5 w-5"/>
+            </span>
+            {label}
+            <span className="ml-auto">→</span>
+          </MagneticButton>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function MyAttendanceView({
+  data,
+  loading,
+  month,
+  setMonth
+}: {
+  data: Row;
+  loading: boolean;
+  month: string;
+  setMonth: (v: string) => void;
+}) {
+  const days: Row[] = data?.days || [];
+  const stats = data?.stats || {};
+
+  const statusBadge = (status: string) => {
+    switch (status) {
+      case 'Present':
+        return <span className="inline-flex rounded-full bg-emerald-100 px-3 py-0.5 text-xs font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">Present</span>;
+      case 'Late':
+        return <span className="inline-flex rounded-full bg-amber-100 px-3 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">Late</span>;
+      case 'Absent':
+        return <span className="inline-flex rounded-full bg-rose-100 px-3 py-0.5 text-xs font-bold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">Absent</span>;
+      case 'Sunday':
+      case 'Holiday':
+        return <span className="inline-flex rounded-full bg-slate-100 px-3 py-0.5 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">{status}</span>;
+      default:
+        return <span className="inline-flex rounded-full bg-slate-50 px-3 py-0.5 text-xs font-semibold text-slate-400 dark:bg-slate-900 dark:text-slate-500">No class</span>;
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-black text-slate-900 dark:text-slate-100">My Attendance</h2>
+          <p className="mt-0.5 text-xs text-slate-500">Monthly attendance calendar and classes taken record (Read-only)</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300">
+          <span>Month:</span>
+          <input
+            type="month"
+            value={month}
+            onChange={e => setMonth(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </label>
+      </div>
+
+      {/* Metric Cards */}
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-3xl font-black text-[#EA580C]"><AnimatedCount value={Number(stats.daysPresent ?? 0)}/></p>
+          <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">DAYS PRESENT</p>
+        </div>
+        <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-3xl font-black text-[#EA580C]"><AnimatedCount value={Number(stats.classesTaken ?? 0)}/></p>
+          <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">CLASSES TAKEN</p>
+        </div>
+        <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-3xl font-black text-[#EA580C]">{Number(stats.teachingHours ?? 0).toFixed(1)} h</p>
+          <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">TEACHING HOURS</p>
+        </div>
+        <div className="rounded-2xl border border-orange-200/80 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-3xl font-black text-[#EA580C]">{Number(stats.attendanceRate ?? 100)}%</p>
+          <p className="mt-1 text-[11px] font-black uppercase tracking-wider text-slate-400">ATTENDANCE</p>
+        </div>
+      </div>
+
+      {/* Day Register Table */}
+      <Panel title={`Day Register · ${month}`} icon="calendar" tilt={false}>
+        <Table
+          columns={['DATE', 'DAY', 'STATUS', 'CLASSES TAKEN', 'CHECK IN', 'CHECK OUT', 'TEACHING HOURS']}
+          rows={days}
+          loading={loading}
+          empty="No attendance records found for this month."
+          renderRow={(row: Row) => (
+            <tr key={row.date} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+              <td className="px-4 py-3 font-mono font-bold text-slate-800 dark:text-slate-200">{row.date}</td>
+              <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{row.day}</td>
+              <td className="px-4 py-3">{statusBadge(row.status)}</td>
+              <td className="px-4 py-3">
+                {row.classesTaken > 0 ? (
+                  <div>
+                    <span className="font-bold text-slate-900 dark:text-slate-100">{row.classesTaken} class{row.classesTaken > 1 ? 'es' : ''}</span>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(row.classes || []).map((c: Row, idx: number) => (
+                        <span key={idx} className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700 dark:bg-orange-950/60 dark:text-orange-300">
+                          {c.subject || c.title} ({c.batch})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-slate-400">—</span>
+                )}
+              </td>
+              <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{row.checkIn || '—'}</td>
+              <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{row.checkOut || '—'}</td>
+              <td className="px-4 py-3 font-bold text-slate-800 dark:text-slate-200">{row.teachingHours > 0 ? `${row.teachingHours} h` : '—'}</td>
+            </tr>
+          )}
+        />
+      </Panel>
+    </>
+  );
+}
+
 function Loading(){return <div className="space-y-3" aria-label="Loading"><div className="teacher-skeleton h-5 w-1/3 rounded"/><div className="teacher-skeleton h-10 rounded"/><div className="teacher-skeleton h-10 rounded"/></div>}
 function Table({columns,rows,empty,loading,renderRow}:{columns:string[];rows:Row[];empty:string;loading:boolean;renderRow:(row:Row)=>ReactNode}){return <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-sm"><thead className="bg-gradient-to-r from-blue-50 to-indigo-100 text-[11px] font-black uppercase text-blue-700"><tr>{columns.map(col=><th key={col} className="px-4 py-3">{col}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map(renderRow)}</tbody></table>{loading&&<div className="p-5"><Loading/></div>}{!loading&&!rows.length&&<div className="p-5"><Empty title={empty}/></div>}</div>}
 function StudentsView({data,loading,query,setQuery,onSearch}:{data:Row;loading:boolean;query:string;setQuery:(v:string)=>void;onSearch:()=>void}) { const rows=data.records||[];return <Panel title={`Students (${rows.length})`} icon="student"><form onSubmit={e=>{e.preventDefault();onSearch()}} className="mb-4 flex flex-wrap gap-2"><input className={`${inputClass} max-w-md`} value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search by name or roll number..."/><button className={buttonClass}>Search</button></form><Table columns={['STUDENT','BATCH','ROLL NO.','ATTENDANCE %','STATUS','RISK']} rows={rows} loading={loading} empty="No students found in your batches." renderRow={row=><tr key={row.id}><td className="px-4 py-3 font-bold">{row.name}</td><td className="px-4 py-3">{row.batchName}</td><td className="px-4 py-3">{row.roll||'—'}</td><td className="px-4 py-3">{row.attendance}%</td><td className="px-4 py-3">{row.status}</td><td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${row.risk==='At risk'?'bg-rose-50 text-rose-700':'bg-emerald-50 text-emerald-700'}`}>{row.risk}</span></td></tr>}/></Panel> }

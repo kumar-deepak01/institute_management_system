@@ -29,6 +29,7 @@ const AdminFinancePage = lazy(() => import('./AdminFinancePage'));
 const AdminPayrollPage = lazy(() => import('./AdminPayrollPage'));
 const AdminWorkShiftsPage = lazy(() => import('./AdminWorkShiftsPage'));
 const AdminFacultyPerformancePage = lazy(() => import('./AdminFacultyPerformancePage'));
+const AdminReportsPage = lazy(() => import('./AdminReportsPage'));
 
 type Dashboard = {
   setup: { completed: number; total: number; steps: { label: string; description: string; complete: boolean }[] };
@@ -295,7 +296,8 @@ export default function AdminPage() {
       item =>
         item.path === currentPath ||
         (item.path === '/admin/students' && currentPath.startsWith('/admin/students/')) ||
-        (item.path === '/admin/staff' && currentPath.startsWith('/admin/staff/')),
+        (item.path === '/admin/staff' && currentPath.startsWith('/admin/staff/')) ||
+        (item.path === '/admin/reports' && currentPath.startsWith('/admin/reports')),
     );
   const pageTitle = activeItem?.label || 'Dashboard';
   const searchMatches = useMemo(
@@ -532,6 +534,10 @@ export default function AdminPage() {
           ) : ['/admin/download-center', '/admin/video-lectures', '/admin/live-classes'].includes(currentPath) ? (
             <Suspense fallback={<RouteLoadingSpinner message="Loading content workspace…" />}>
               <AdminContentMediaPage key={currentPath} />
+            </Suspense>
+          ) : currentPath.startsWith('/admin/reports') ? (
+            <Suspense fallback={<RouteLoadingSpinner message="Loading reports workspace…" />}>
+              <AdminReportsPage key={currentPath} />
             </Suspense>
           ) : currentPath !== '/admin' ? (
             <section className="grid min-h-[60vh] place-items-center">

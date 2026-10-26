@@ -6,6 +6,7 @@ const { handleCurriculumRoute } = require('../controllers/curriculumController')
 const { handleAcademicsRoute } = require('../controllers/academicsController');
 const { handleAcademicOperationsRoute, safeLog: logAcademicFailure } = require('../controllers/academicOperationsController');
 const { handleContentMediaRoute } = require('../controllers/contentMediaController');
+const { handleReportsRoute } = require('../controllers/reportsController');
 const { handlePayrollRoute } = require('../controllers/payrollController');
 const { handleStaffInsightsRoute } = require('../controllers/staffInsightsController');
 const { handleIntegrationsRoute } = require('../controllers/integrationsController');
@@ -23,6 +24,8 @@ async function handleApiRoute(req, res, url) {
   if (url.pathname.startsWith('/api/photos/')) return handlePhotosRoute(req, res, url).catch(error => handleRouteError(error, res));
   const studentPortalResult = await handleStudentPortalRoute(req, res, url).catch(error => handleRouteError(error, res));
   if (studentPortalResult !== null) return studentPortalResult;
+  const reportsResult = await handleReportsRoute(req, res, url).catch(error => handleRouteError(error, res));
+  if (reportsResult !== null) return reportsResult;
   const payrollResult = await handlePayrollRoute(req, res, url).catch(error => handleRouteError(error, res));
   if (payrollResult !== null) return payrollResult;
   const staffInsightsResult = await handleStaffInsightsRoute(req, res, url).catch(error => handleRouteError(error, res));
