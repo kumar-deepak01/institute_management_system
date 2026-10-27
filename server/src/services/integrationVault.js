@@ -3,16 +3,28 @@
 const crypto = require('node:crypto');
 
 function encryptionKey() {
-  const key = Buffer.from(process.env.INTEGRATIONS_ENCRYPTION_KEY || '', 'base64');
-  if (key.length !== 32) throw Object.assign(new Error('Integration credential encryption is not configured.'), { code: 'INTEGRATIONS_KEY_INVALID' });
+  const raw = (process.env.INTEGRATION_ENCRYPTION_KEY || process.env.INTEGRATIONS_ENCRYPTION_KEY || '').trim();
+  if (!raw) {
+    throw Object.assign(new Error('INTEGRATION_ENCRYPTION_KEY not set'), { code: 'INTEGRATION_ENCRYPTION_KEY_NOT_SET' });
+  }
+  let key = Buffer.from(raw, 'base64');
+  if (key.length !== 32) {
+    if (Buffer.byteLength(raw, 'utf8') === 32) {
+      key = Buffer.from(raw, 'utf8');
+    } else {
+      throw Object.assign(new Error('Integration credential encryption is not configured.'), { code: 'INTEGRATIONS_KEY_INVALID' });
+    }
+  }
   return key;
 }
+
 function encryptIntegrationValue(value) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
   return `v1.${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${encrypted.toString('base64url')}`;
 }
+
 function decryptIntegrationValue(value) {
   const match = /^v1\.([^.]+)\.([^.]+)\.([^.]+)$/.exec(String(value || ''));
   if (!match) throw new Error('Stored integration credentials could not be decrypted.');

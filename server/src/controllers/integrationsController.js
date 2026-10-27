@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { z } = require('zod');
 const { getPool } = require('../services/postgresStore');
 const { queryWithLimit } = require('../services/queryConcurrency');
-const { getSession, validCsrfRequest } = require('../middleware/auth');
+const { getSession, validCsrfRequest, isAdminRole } = require('../middleware/auth');
 const { resolveSessionAccount } = require('./apiController');
 const { body, json } = require('../middleware/http');
 const { encryptIntegrationValue, decryptIntegrationValue } = require('../services/integrationVault');
@@ -109,7 +109,7 @@ async function authenticate(req) {
   if (!session) return { error: { status: 401, message: 'Sign in required.' } };
   const account = await resolveSessionAccount(req);
   if (!account) return { error: { status: 401, message: 'Sign in required.' } };
-  if (account.role !== 'admin') return { error: { status: 403, message: 'Administrator access is required.' } };
+  if (!isAdminRole(account.role)) return { error: { status: 403, message: 'Administrator access is required.' } };
   return { session, account };
 }
 async function parseInput(req, res, session, maxBytes = 128 * 1024) {
@@ -338,16 +338,99 @@ async function handleCustomAction(req, res, actionId, auth) {
   } catch (error) { await audit('custom','custom.action','failed',auth.account.id,Number(error?.status)||500); logError('/api/admin/integrations/custom/actions','run connector action',error); return send(res, 502, { error: 'Custom connector action failed.' }); }
 }
 
+async function testIntegrationHandler(req, res, auth) {
+  const input = await parseInput(req, res, auth.session, 16384);
+  if (!input) return;
+
+  const provider = String(input.provider || '').trim().toLowerCase();
+  const creds = (input.credentials && typeof input.credentials === 'object') ? input.credentials : input;
+
+  if (provider === 'zoom') {
+    const accountId = String(creds.accountId || '').trim();
+    const clientId = String(creds.clientId || '').trim();
+    const clientSecret = String(creds.clientSecret || '').trim();
+    const zoomUserEmail = String(creds.zoomUserEmail || '').trim();
+
+    if (!accountId || !clientId || !clientSecret) {
+      return send(res, 200, { ok: false, message: 'Account ID, Client ID, and Client Secret are required for Zoom.' });
+    }
+
+    try {
+      const tokenUrl = `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${encodeURIComponent(accountId)}`;
+      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      const tokenRes = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok) {
+        const errMsg = tokenData.reason || tokenData.error || tokenData.message || `HTTP ${tokenRes.status}`;
+        console.error(`[Zoom Test] Token failed: ${errMsg}`);
+        return send(res, 200, { ok: false, message: `Zoom authentication failed: ${errMsg}` });
+      }
+
+      if (!tokenData.access_token) {
+        return send(res, 200, { ok: false, message: 'Zoom did not return an access token.' });
+      }
+
+      const userTarget = zoomUserEmail ? encodeURIComponent(zoomUserEmail) : 'me';
+      const userRes = await fetch(`https://api.zoom.us/v2/users/${userTarget}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      const userData = await userRes.json().catch(() => ({}));
+      if (!userRes.ok) {
+        const userErrMsg = userData.message || `HTTP ${userRes.status}`;
+        console.error(`[Zoom Test] User check failed: ${userErrMsg}`);
+        return send(res, 200, { ok: false, message: `Zoom user verification failed: ${userErrMsg}` });
+      }
+
+      return send(res, 200, { ok: true, message: 'Zoom integration verified successfully.' });
+    } catch (err) {
+      const msg = err.name === 'TimeoutError' ? 'Zoom connection timed out (10s).' : (err.message || 'Zoom connection failed.');
+      console.error(`[Zoom Test] Error: ${err.message}`);
+      return send(res, 200, { ok: false, message: msg });
+    }
+  }
+
+  if (provider === 'google_meet') {
+    const meetingLink = String(creds.meetingLink || creds.meeting_link || '').trim();
+    if (!meetingLink) {
+      return send(res, 200, { ok: false, message: 'Meeting Link is required for Google Meet.' });
+    }
+    const meetRegex = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:\?.*)?$/i;
+    if (!meetRegex.test(meetingLink)) {
+      return send(res, 200, { ok: false, message: 'Invalid Google Meet link. Format must be https://meet.google.com/xxx-xxxx-xxx' });
+    }
+    return send(res, 200, { ok: true, message: 'Google Meet link verified successfully.' });
+  }
+
+  return send(res, 200, { ok: false, message: 'Choose a valid provider (Zoom or Google Meet).' });
+}
+
 async function handleIntegrationsRoute(req, res, url) {
   const pathname = url.pathname;
   const webhookResult = await handleWhatsAppWebhook(req, res, url);
   if (webhookResult !== null) return webhookResult;
-  const relevant = pathname === '/api/admin/integrations' || pathname.startsWith('/api/admin/integrations/') || pathname.startsWith('/api/admin/proctoring/') || pathname.startsWith('/api/admin/ai/');
+  const relevant = pathname === '/api/integrations/test' || pathname === '/api/admin/integrations/test' || pathname === '/api/admin/integrations' || pathname.startsWith('/api/admin/integrations/') || pathname.startsWith('/api/admin/proctoring/') || pathname.startsWith('/api/admin/ai/');
   if (!relevant) return null;
   let auth;
   try { auth = await authenticate(req); }
   catch (error) { logError(pathname,'authenticate admin',error); return send(res,503,{error:'Account storage is unavailable.'}); }
   if (auth.error) return send(res,auth.error.status,{error:auth.error.message});
+
+  if ((pathname === '/api/integrations/test' || pathname === '/api/admin/integrations/test') && req.method === 'POST') {
+    return testIntegrationHandler(req, res, auth);
+  }
 
   if ((pathname === '/api/admin/integrations' || pathname === '/api/admin/integrations/status') && req.method === 'GET') {
     try {

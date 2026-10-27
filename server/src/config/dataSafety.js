@@ -10,6 +10,7 @@ const PROTECTED_TABLES = Object.freeze([
   'academic_years',
   'fee_types',
   'fee_structures',
+  'staff_integrations',
 ]);
 
 function isTableProtected(tableName) {

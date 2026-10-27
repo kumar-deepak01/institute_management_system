@@ -3,6 +3,7 @@ const ExcelJS = require('exceljs');
 const multer = require('multer');
 const { z } = require('zod');
 const { getPool } = require('../services/postgresStore');
+const { encryptIntegrationValue } = require('../services/integrationVault');
 const { passwordHash } = require('../security/password');
 const { getPhotoUrl, getPhotoUrls, deletePhoto } = require('../services/photoStorage');
 const { queryWithLimit } = require('../services/queryConcurrency');
@@ -52,6 +53,15 @@ const staffSchema = z.object({
   panNumber: z.string().trim().max(10).default(''),
   assignments: z.array(assignmentSchema).max(100).default([]), temporaryPassword: z.string().max(200).optional().default(''), confirmPassword: z.string().max(200).optional().default(''),
   status: z.enum(['active','inactive']).default('active'),
+  integration: z.object({
+    provider: z.string().trim().max(40).optional().default(''),
+    accountId: z.string().trim().max(160).optional().default(''),
+    clientId: z.string().trim().max(160).optional().default(''),
+    clientSecret: z.string().trim().max(500).optional().default(''),
+    zoomUserEmail: z.string().trim().max(254).optional().default(''),
+    meetingLink: z.string().trim().max(1000).optional().default(''),
+    status: z.enum(['not_checked','verified','failed']).optional().default('not_checked'),
+  }).optional(),
 });
 
 function parseStaff(input, isFormSubmit = false) {
@@ -102,6 +112,17 @@ function parseStaff(input, isFormSubmit = false) {
   if (fields.panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(fields.panNumber)) return { error: 'Enter a valid PAN number.' };
   if (fields.temporaryPassword && fields.temporaryPassword.length < 10) return { error: 'Temporary password must have at least 10 characters.' };
   if (fields.temporaryPassword !== fields.confirmPassword) return { error: 'Passwords do not match.' };
+  if (input && input.integration) {
+    fields.integration = {
+      provider: clean(input.integration.provider, 40).toLowerCase(),
+      accountId: clean(input.integration.accountId, 160),
+      clientId: clean(input.integration.clientId, 160),
+      clientSecret: clean(input.integration.clientSecret, 500),
+      zoomUserEmail: clean(input.integration.zoomUserEmail, 254),
+      meetingLink: clean(input.integration.meetingLink, 1000),
+      status: ['not_checked','verified','failed'].includes(input.integration.status) ? input.integration.status : 'not_checked',
+    };
+  }
   return { fields };
 }
 
@@ -276,6 +297,52 @@ async function saveStaffRecords(client, staffId, staffRecord, accountRecord = nu
     on conflict(source_tab,record_id) do update set record_json=excluded.record_json,updated_at=now()`, [staffId, JSON.stringify({ _type: 'app-data', collection: 'staff', ...staffRecord })]);
   // Account is stored in public.accounts table directly
 }
+async function persistStaffIntegration(client, staffId, integration, isUpdate = false) {
+  if (!integration || !integration.provider || integration.provider === 'none' || integration.provider === '') {
+    await client.query('delete from public.staff_integrations where staff_id = $1', [staffId]);
+    return;
+  }
+  const provider = integration.provider;
+  if (!['zoom', 'google_meet'].includes(provider)) return;
+
+  await client.query('delete from public.staff_integrations where staff_id = $1 and provider <> $2', [staffId, provider]);
+
+  let clientSecretEncrypted = null;
+  if (provider === 'zoom') {
+    if (integration.clientSecret) {
+      clientSecretEncrypted = encryptIntegrationValue(integration.clientSecret);
+    } else if (isUpdate) {
+      const existing = await client.query('select client_secret_encrypted from public.staff_integrations where staff_id = $1 and provider = $2 limit 1', [staffId, provider]);
+      clientSecretEncrypted = existing.rows[0]?.client_secret_encrypted || null;
+    }
+  }
+
+  const intId = id();
+  const status = ['verified', 'failed', 'not_checked'].includes(integration.status) ? integration.status : 'not_checked';
+  const meetingLink = provider === 'google_meet' ? clean(integration.meetingLink, 1000) : null;
+  const accountId = provider === 'zoom' ? clean(integration.accountId, 160) : null;
+  const clientId = provider === 'zoom' ? clean(integration.clientId, 160) : null;
+  const zoomUserEmail = provider === 'zoom' ? clean(integration.zoomUserEmail, 254) : null;
+
+  await client.query(
+    `insert into public.staff_integrations (
+       id, staff_id, provider, account_id, client_id, client_secret_encrypted, zoom_user_email, meeting_link, status, last_checked_at, updated_at
+     ) values (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, case when $9 in ('verified','failed') then now() else null end, now()
+     )
+     on conflict (staff_id, provider) do update set
+       account_id = excluded.account_id,
+       client_id = excluded.client_id,
+       client_secret_encrypted = coalesce(excluded.client_secret_encrypted, staff_integrations.client_secret_encrypted),
+       zoom_user_email = excluded.zoom_user_email,
+       meeting_link = excluded.meeting_link,
+       status = excluded.status,
+       last_checked_at = case when excluded.status in ('verified','failed') then now() else staff_integrations.last_checked_at end,
+       updated_at = now()`,
+    [intId, staffId, provider, accountId, clientId, clientSecretEncrypted, zoomUserEmail, meetingLink, status]
+  );
+}
+
 async function insertStaff(client, fields) {
   const envPassword = process.env.DEFAULT_STAFF_PASSWORD || '';
   const chosenPassword = fields.temporaryPassword || envPassword;
@@ -302,6 +369,9 @@ async function insertStaff(client, fields) {
   if (fields.bankAccountNumber || fields.bankName || fields.ifscCode || fields.panNumber || fields.upiId || fields.accountHolderName) await client.query(`insert into public.staff_private(staff_id,bank_account_number,bank_name,ifsc_code,pan_number,account_holder_name,branch,upi_id,payment_mode) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),nullif($8,''),coalesce(nullif($9,''),'both'))`, [staffId, fields.bankAccountNumber, fields.bankName, fields.ifscCode, fields.panNumber, fields.accountHolderName, fields.branch, fields.upiId, fields.paymentMode]);
   await persistAssignments(client, staffId, fields.assignments);
   await saveStaffRecords(client, staffId, staffRecord, accountRecord);
+  if (fields.integration) {
+    await persistStaffIntegration(client, staffId, fields.integration, false);
+  }
   return { id: staffId, staffKey, employeeId, accountId, name: fields.name };
 }
 
@@ -367,7 +437,20 @@ async function getOne(staffKey, editMode) {
   const related=await getRelated(row.id,row.staff_key,row.employee_id);
   const thisMonth=related.attendance.filter(item=>String(item.date||item.attendanceDate||'').slice(0,7)===new Date().toISOString().slice(0,7));
   const present=thisMonth.filter(item=>['p','present'].includes(String(item.status||'').toLowerCase())).length;
-  return { record, attendance:related.attendance, payroll:related.payroll, monthAttendance:{present,total:thisMonth.length} };
+  const intRes = await getPool().query('select * from public.staff_integrations where staff_id=$1 limit 1', [row.id]);
+  const intRow = intRes.rows[0];
+  const integration = intRow ? {
+    provider: intRow.provider,
+    accountId: intRow.account_id || '',
+    clientIdMasked: intRow.client_id ? `••••${intRow.client_id.slice(-4)}` : '',
+    clientId: editMode ? (intRow.client_id || '') : undefined,
+    hasSecret: Boolean(intRow.client_secret_encrypted),
+    zoomUserEmail: intRow.zoom_user_email || '',
+    meetingLink: intRow.meeting_link || '',
+    status: intRow.status || 'not_checked',
+    lastCheckedAt: intRow.last_checked_at || null,
+  } : null;
+  return { record, attendance:related.attendance, payroll:related.payroll, monthAttendance:{present,total:thisMonth.length}, integration };
 }
 
 async function deactivateAccount(client, staffId, accountRow) {
@@ -418,7 +501,7 @@ async function handleStaffRoute(req,res,url,input,actor) {
     if(!action&&req.method==='GET'){const detail=await getOne(staffKey,url.searchParams.get('edit')==='1');return detail?send(200,detail):send(404,{error:'Staff member was not found.'});}
     if(!action&&req.method==='PUT'){
       const parsed=parseStaff(input, true);if(parsed.error)return send(400,{error:parsed.error});const fields=parsed.fields;
-      const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const old=found.rows[0];if(fields.employeeId!==old.employee_id){const dupe=await client.query('select 1 from public.staff where lower(employee_id)=lower($1) and id<>$2',[fields.employeeId,old.id]);if(dupe.rowCount){await client.query('rollback');return send(409,{error:'That employee ID is already assigned.'});}await reserveManualEmployeeId(client,fields.employeeId);}const refs=validateReferences(fields,await getLookups());if(refs){await client.query('rollback');return send(400,{error:refs});}const record=makeRecord(fields,old.id,old.staff_key,fields.employeeId,old.record_json);await client.query(`update public.staff set employee_id=$2,name=$3,phone=$4,status=$5,staff_type=$6,qualification=$7,specialization=$8,experience_years=$9,joining_date=nullif($10,'')::date,bio=$11,employment_type=$12,monthly_salary=$13,base_salary=$14,per_class_rate=$15,hourly_rate=$16,pf_percent=$17,tds_percent=$18,branch_ids=$19::jsonb,record_json=$20::jsonb,updated_at=now() where id=$1`,[old.id,fields.employeeId,fields.name,fields.phone,fields.status,fields.staffType,fields.qualification,fields.specialization,fields.experienceYears,fields.joiningDate,fields.bio,fields.employmentType,fields.monthlySalary,fields.baseSalary,fields.perClassRate,fields.hourlyRate,fields.pfPercent,fields.tdsPercent,JSON.stringify(fields.branches),JSON.stringify(record)]);await client.query('update public.accounts set name=$2,record_json=record_json||jsonb_build_object(\'name\',$2,\'staffType\',$3),updated_at=now() where student_id=$1 and role=\'teacher\'',[old.id,fields.name,fields.staffType]);await persistAssignments(client,old.id,fields.assignments);await client.query(`insert into public.staff_private(staff_id,account_holder_name,bank_name,bank_account_number,ifsc_code,branch,upi_id,payment_mode,pan_number,updated_at) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),coalesce(nullif($8,''),'both'),nullif($9,''),now()) on conflict(staff_id) do update set account_holder_name=excluded.account_holder_name,bank_name=excluded.bank_name,bank_account_number=excluded.bank_account_number,ifsc_code=excluded.ifsc_code,branch=excluded.branch,upi_id=excluded.upi_id,payment_mode=excluded.payment_mode,pan_number=coalesce(excluded.pan_number,staff_private.pan_number),updated_at=now()`,[old.id,fields.accountHolderName,fields.bankName,fields.bankAccountNumber,fields.ifscCode,fields.branch,fields.upiId,fields.paymentMode,fields.panNumber]);await saveStaffRecords(client,old.id,record);await client.query('commit');invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
+      const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const old=found.rows[0];if(fields.employeeId!==old.employee_id){const dupe=await client.query('select 1 from public.staff where lower(employee_id)=lower($1) and id<>$2',[fields.employeeId,old.id]);if(dupe.rowCount){await client.query('rollback');return send(409,{error:'That employee ID is already assigned.'});}await reserveManualEmployeeId(client,fields.employeeId);}const refs=validateReferences(fields,await getLookups());if(refs){await client.query('rollback');return send(400,{error:refs});}const record=makeRecord(fields,old.id,old.staff_key,fields.employeeId,old.record_json);await client.query(`update public.staff set employee_id=$2,name=$3,phone=$4,status=$5,staff_type=$6,qualification=$7,specialization=$8,experience_years=$9,joining_date=nullif($10,'')::date,bio=$11,employment_type=$12,monthly_salary=$13,base_salary=$14,per_class_rate=$15,hourly_rate=$16,pf_percent=$17,tds_percent=$18,branch_ids=$19::jsonb,record_json=$20::jsonb,updated_at=now() where id=$1`,[old.id,fields.employeeId,fields.name,fields.phone,fields.status,fields.staffType,fields.qualification,fields.specialization,fields.experienceYears,fields.joiningDate,fields.bio,fields.employmentType,fields.monthlySalary,fields.baseSalary,fields.perClassRate,fields.hourlyRate,fields.pfPercent,fields.tdsPercent,JSON.stringify(fields.branches),JSON.stringify(record)]);await client.query('update public.accounts set name=$2,record_json=record_json||jsonb_build_object(\'name\',$2,\'staffType\',$3),updated_at=now() where student_id=$1 and role=\'teacher\'',[old.id,fields.name,fields.staffType]);await persistAssignments(client,old.id,fields.assignments);await client.query(`insert into public.staff_private(staff_id,account_holder_name,bank_name,bank_account_number,ifsc_code,branch,upi_id,payment_mode,pan_number,updated_at) values($1,nullif($2,''),nullif($3,''),nullif($4,''),nullif($5,''),nullif($6,''),nullif($7,''),coalesce(nullif($8,''),'both'),nullif($9,''),now()) on conflict(staff_id) do update set account_holder_name=excluded.account_holder_name,bank_name=excluded.bank_name,bank_account_number=excluded.bank_account_number,ifsc_code=excluded.ifsc_code,branch=excluded.branch,upi_id=excluded.upi_id,payment_mode=excluded.payment_mode,pan_number=coalesce(excluded.pan_number,staff_private.pan_number),updated_at=now()`,[old.id,fields.accountHolderName,fields.bankName,fields.bankAccountNumber,fields.ifscCode,fields.branch,fields.upiId,fields.paymentMode,fields.panNumber]);await saveStaffRecords(client,old.id,record);if(fields.integration!==undefined){await persistStaffIntegration(client,old.id,fields.integration,true);}await client.query('commit');invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
     }
     if(action==='status'&&req.method==='POST'){
       const status=input.status==='active'?'active':input.status==='inactive'?'inactive':'';if(!status)return send(400,{error:'Choose active or inactive status.'});const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const row=found.rows[0],account=await client.query("select id,email,record_json from public.accounts where student_id=$1 and role='teacher' for update",[row.id]);const record={...row.record_json,status};await client.query('update public.staff set status=$2,record_json=record_json||jsonb_build_object(\'status\',$2),updated_at=now() where id=$1',[row.id,status]);if(status==='inactive')await deactivateAccount(client,row.id,account.rows[0]);else if(account.rows[0]){const envPassword=process.env.DEFAULT_STAFF_PASSWORD||'';if(envPassword.length<10){await client.query('rollback');return send(400,{error:'Set DEFAULT_STAFF_PASSWORD to a value at least 10 characters long before activating staff.'});}const salt=crypto.randomBytes(16).toString('base64url'),hash=await passwordHash(envPassword,salt),version=Number(account.rows[0].record_json?.sessionVersion||0)+1,accountJson={...account.rows[0].record_json,status:'active',passwordSalt:salt,passwordHash:hash,mustChangePassword:true,sessionVersion:version};await client.query('update public.accounts set password_hash=$2,password_salt=$3,must_change_password=true,session_version=$4,record_json=$5::jsonb,updated_at=now() where id=$1',[account.rows[0].id,hash,salt,version,JSON.stringify(accountJson)]);await client.query('delete from public.login_failures where email=$1',[account.rows[0].email]);await client.query('update public.app_records set record_json=$3::jsonb,updated_at=now() where source_tab=$1 and record_id=$2',['Students',account.rows[0].id,JSON.stringify({_type:'account',...accountJson})]);}await saveStaffRecords(client,row.id,record);await client.query('commit');invalidateStats();return send(200,{ok:true,status});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
@@ -430,7 +513,7 @@ async function handleStaffRoute(req,res,url,input,actor) {
       const email=String(input.email||'').trim().toLowerCase();if(input.confirm!==true||!emailPattern.test(email))return send(400,{error:'Confirm the audited email change and enter a valid email address.'});const client=await getPool().connect();try{await client.query('begin');const found=await client.query('select * from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const row=found.rows[0],account=await client.query("select id,email,record_json from public.accounts where student_id=$1 and role='teacher' for update",[row.id]);if(!account.rowCount){await client.query('rollback');return send(404,{error:'Staff login account was not found.'});}const existing=await client.query('select 1 from public.accounts where lower(email)=$1 and id<>$2',[email,account.rows[0].id]);if(existing.rowCount){await client.query('rollback');return send(409,{error:'That email address already belongs to an account.'});}const oldEmail=row.email,version=Number(account.rows[0].record_json?.sessionVersion||0)+1,accountJson={...account.rows[0].record_json,email,sessionVersion:version},record={...row.record_json,email};await client.query('update public.staff set email=$2,record_json=record_json||jsonb_build_object(\'email\',$2),updated_at=now() where id=$1',[row.id,email]);await client.query('update public.accounts set email=$2,session_version=$3,record_json=$4::jsonb,updated_at=now() where id=$1',[account.rows[0].id,email,version,JSON.stringify(accountJson)]);await client.query('update public.app_records set record_json=$3::jsonb,updated_at=now() where source_tab=$1 and record_id=$2',['Staff',row.id,JSON.stringify({_type:'app-data',collection:'staff',...record})]);await client.query('update public.app_records set record_json=$3::jsonb,updated_at=now() where source_tab=$1 and record_id=$2',['Students',account.rows[0].id,JSON.stringify({_type:'account',...accountJson})]);await client.query('insert into public.staff_email_changes(id,staff_id,old_email,new_email,changed_by) values($1,$2,$3,$4,$5)',[id(),row.id,oldEmail,email,actor.email]);await client.query('delete from public.login_failures where email=$1',[oldEmail]);await client.query('commit');invalidateStats();return send(200,{ok:true,email});}catch(error){await client.query('rollback');if(error.code==='23505')return send(409,{error:'That email address already belongs to an account.'});throw error;}finally{client.release();}
     }
     if(!action&&req.method==='DELETE'){
-      if(input.confirm!==true)return send(400,{error:'Confirm staff deletion before continuing.'});const client=await getPool().connect();let photo=null;try{await client.query('begin');const found=await client.query('select id,employee_id,email from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const row=found.rows[0];photo=await getPhotoMetadata('staff',row.id);const account=await client.query("select id,email,role,record_json from public.accounts where student_id=$1 and role='teacher' for update",[row.id]);if(account.rows[0]?.role==='admin'){await client.query('rollback');return send(403,{error:'Administrator accounts cannot be deleted.'});}if(account.rows[0]){await client.query("delete from public.accounts where id=$1 and role<>'admin'",[account.rows[0].id]);}await client.query('delete from public.staff where id=$1',[row.id]);await client.query("delete from public.app_records where source_tab='Staff' and record_id=$1",[row.id]);await client.query('delete from public.login_failures where email=$1',[row.email]);await client.query('commit');if(photo?.photo_path){try{await deletePhoto('staff',row.employee_id || row.id);}catch(error){safeLog('delete photo',error);}}invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
+      if(input.confirm!==true)return send(400,{error:'Confirm staff deletion before continuing.'});const client=await getPool().connect();let photo=null;try{await client.query('begin');const found=await client.query('select id,employee_id,email from public.staff where staff_key=$1 for update',[staffKey]);if(!found.rowCount){await client.query('rollback');return send(404,{error:'Staff member was not found.'});}const row=found.rows[0];photo=await getPhotoMetadata('staff',row.id);const account=await client.query("select id,email,role,record_json from public.accounts where student_id=$1 and role='teacher' for update",[row.id]);if(account.rows[0]?.role==='admin'){await client.query('rollback');return send(403,{error:'Administrator accounts cannot be deleted.'});}if(account.rows[0]){await client.query("delete from public.accounts where id=$1 and role<>'admin'",[account.rows[0].id]);}await client.query('delete from public.staff_integrations where staff_id=$1',[row.id]);await client.query('delete from public.staff where id=$1',[row.id]);await client.query("delete from public.app_records where source_tab='Staff' and record_id=$1",[row.id]);await client.query('delete from public.login_failures where email=$1',[row.email]);await client.query('commit');if(photo?.photo_path){try{await deletePhoto('staff',row.employee_id || row.id);}catch(error){safeLog('delete photo',error);}}invalidateStats();return send(200,{ok:true});}catch(error){await client.query('rollback');throw error;}finally{client.release();}
     }
     return send(405,{error:'Method not allowed.'});
   } catch(error) {
