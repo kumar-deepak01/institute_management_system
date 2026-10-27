@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const sheetsStore = require('../services/postgresStore');
 const { passwordHash, verifyPassword } = require('../security/password');
 const { sessionSecret, admissionAdminToken } = require('../config/session');
-const { getSession, setSession, accountView, safeEqual, validCsrfRequest } = require('../middleware/auth');
+const { getSession, setSession, accountView, safeEqual, validCsrfRequest, normalizeRole, isAdminRole } = require('../middleware/auth');
 const collections = require('../models/collections');
 const { json, body } = require('../middleware/http');
 const { getPhotoUrl, deletePhoto } = require('../services/photoStorage');
@@ -14,7 +14,7 @@ const { getPool } = require('../services/postgresStore');
 const { handleStudentRoute } = require('./studentController');
 const { handleStaffRoute } = require('./staffController');
 const { route: handleFinanceRoute } = require('./financeController');
-const { sendPasswordResetOtp } = require('../services/mail');
+const { sendPasswordResetOtp, isEmailServiceConfigured } = require('../services/mail');
 const root = path.resolve(__dirname, '../..');
 const admissionPhotosPath = path.join(root, 'uploads', 'admissions');
 const initialPasswords = { student: process.env.DEFAULT_STUDENT_PASSWORD, parent: process.env.DEFAULT_PARENT_PASSWORD, staff: process.env.DEFAULT_STAFF_PASSWORD };
@@ -105,20 +105,99 @@ const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString('base64ur
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 
 async function loadAccounts() {
-  accounts = (await sheetsStore.getSheetRecords('Students')).filter(item => item._type === 'account');
-  if (accounts.length === 0) {
-    try {
-      const { rows } = await getPool().query('select record_json from public.accounts');
-      if (rows && rows.length > 0) {
-        accounts = rows.map(r => r.record_json).filter(Boolean);
-      }
-    } catch (_) {}
+  try {
+    const { rows } = await getPool().query('select id, email, role, name, student_id, password_hash, password_salt, must_change_password, session_version, record_json from public.accounts');
+    if (rows && rows.length > 0) {
+      accounts = rows.map(row => {
+        const json = row.record_json && typeof row.record_json === 'object' ? row.record_json : {};
+        return {
+          ...json,
+          id: String(row.id),
+          email: normalizeEmail(row.email || json.email),
+          role: normalizeRole(row.role || json.role || 'student'),
+          name: String(row.name || json.name || ''),
+          studentId: row.student_id || json.studentId || null,
+          passwordHash: row.password_hash || json.passwordHash || '',
+          passwordSalt: row.password_salt || json.passwordSalt || '',
+          mustChangePassword: Boolean(row.must_change_password !== null && row.must_change_password !== undefined ? row.must_change_password : json.mustChangePassword),
+          sessionVersion: Number(row.session_version ?? json.sessionVersion ?? 0),
+          _type: 'account',
+        };
+      });
+      return;
+    }
+  } catch (error) {
+    logDatabaseFailure('loadAccounts from accounts table', error);
+  }
+  // Backward-compatibility fallback: read from app_records Students tab
+  try {
+    const sheetAccounts = (await sheetsStore.getSheetRecords('Students')).filter(item => item._type === 'account');
+    accounts = sheetAccounts.map(item => ({ ...item, email: normalizeEmail(item.email) }));
+  } catch (_) {
+    accounts = [];
   }
 }
+
 async function saveAccounts(next) {
-  const current = await sheetsStore.getSheetRecords('Students');
-  await sheetsStore.saveSheetRecords('Students', [...current.filter(item => item._type !== 'account'), ...next.map(item => ({ ...item, _type: 'account' }))]);
-  accounts = next;
+  const client = await getPool().connect();
+  try {
+    await client.query('begin');
+    const existingIds = new Set(next.map(item => String(item.id)));
+    // ADMIN PROTECT GUARD: never delete admin accounts
+    const allDbAccounts = await client.query('select id, role from public.accounts for update');
+    for (const dbAcc of allDbAccounts.rows) {
+      if (!existingIds.has(String(dbAcc.id))) {
+        if (dbAcc.role === 'admin') continue;
+        await client.query('delete from public.accounts where id = $1', [dbAcc.id]);
+      }
+    }
+    for (const account of next) {
+      const email = normalizeEmail(account.email);
+      const role = normalizeRole(account.role || 'student');
+      const name = account.name || '';
+      const studentId = account.studentId || account.student_id || null;
+      const hash = account.passwordHash || account.password_hash || '';
+      const salt = account.passwordSalt || account.password_salt || '';
+      const mustChange = Boolean(account.mustChangePassword ?? account.must_change_password ?? false);
+      const sessionVersion = Number(account.sessionVersion ?? account.session_version ?? 0);
+      const recordJson = {
+        ...(account.record_json && typeof account.record_json === 'object' ? account.record_json : account),
+        id: account.id,
+        email,
+        role,
+        name,
+        studentId,
+        passwordHash: hash,
+        passwordSalt: salt,
+        mustChangePassword: mustChange,
+        sessionVersion,
+        _type: 'account',
+      };
+      await client.query(
+        'insert into public.accounts (id, email, role, name, student_id, password_hash, password_salt, must_change_password, session_version, record_json, updated_at) ' +
+        'values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, now()) ' +
+        'on conflict (id) do update set ' +
+        'email = excluded.email, ' +
+        'role = case when public.accounts.role = \'admin\' then \'admin\' else excluded.role end, ' +
+        'name = excluded.name, ' +
+        'student_id = excluded.student_id, ' +
+        'password_hash = excluded.password_hash, ' +
+        'password_salt = excluded.password_salt, ' +
+        'must_change_password = excluded.must_change_password, ' +
+        'session_version = excluded.session_version, ' +
+        'record_json = excluded.record_json, ' +
+        'updated_at = now()',
+        [account.id, email, role, name, studentId, hash, salt, mustChange, sessionVersion, JSON.stringify(recordJson)]
+      );
+    }
+    await client.query('commit');
+    accounts = next;
+  } catch (err) {
+    try { await client.query('rollback'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function changeAccountPassword(accountId, currentPassword, nextPassword) {
@@ -142,7 +221,7 @@ async function resolveSessionAccount(req) {
   if (!session) return null;
   await loadAccounts();
   const account=accounts.find(item => item.id === session.accountId) || null;
-  return account && Number(account.sessionVersion||0)===Number(session.sessionVersion||0) ? account : null;
+  return account && Number(account.sessionVersion||0)===Number(session.sessionVersion||0) ? { ...account, role: normalizeRole(account.role) } : null;
 }
 
 const admissionConfigId = 'admission-config';
@@ -210,11 +289,12 @@ async function api(req, res, url) {
   }
 
   const actor = session && accounts.find(item => item.id === session.accountId);
+  if (session && !actor) return json(res, 401, { error: 'Your session has expired. Sign in again.' });
   if (session && actor && Number(session.sessionVersion || 0) !== Number(actor.sessionVersion || 0)) return json(res, 401, { error: 'Your session has expired. Sign in again.' });
   if (req.method === 'POST' && url.pathname === '/api/auth/forgot-password') {
     const email=normalizeEmail(input.email),generic='If this email is registered, a password reset code has been sent.';
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(res,200,{message:generic});
-    if(!process.env.SMTP_HOST||!process.env.SMTP_PORT||!process.env.SMTP_USER||!process.env.SMTP_PASS||!process.env.MAIL_FROM)return json(res,503,{error:'Password reset could not be sent. Contact your institute administrator.'});
+    if(!isEmailServiceConfigured())return json(res,503,{error:'Password reset could not be sent. Contact your institute administrator.'});
     if(!allowPasswordResetRequest(email,requestIp(req)))return json(res,200,{message:generic});
     const account=accounts.find(item=>item.email===email);if(!account)return json(res,200,{message:generic});
     const resetId=randomToken(24),otp=String(crypto.randomInt(0,1000000)).padStart(6,'0');
@@ -225,7 +305,7 @@ async function api(req, res, url) {
     } catch(error) {
       logDatabaseFailure('password reset email delivery',error);
       try{await getPool().query('delete from public.password_resets where id=$1',[resetId]);}catch(cleanupError){logDatabaseFailure('password reset cleanup',cleanupError);}
-      return json(res,503,{error:'Password reset could not be sent. Check mail service settings and try again.'});
+      return json(res,200,{message:generic});
     }
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/reset-password') {
@@ -248,7 +328,7 @@ async function api(req, res, url) {
   if (url.pathname.startsWith('/api/admin/students')) return handleStudentRoute(req, res, url, input || {}, actor);
   if (url.pathname.startsWith('/api/admin/finance')) return handleFinanceRoute(req, res, url, input || {}, actor, session);
   if (req.method === 'GET' && url.pathname === '/api/admin/dashboard') {
-    if (!actor || actor.role !== 'admin') return json(res, 403, { error: 'Administrator access is required.' });
+    if (!actor || !isAdminRole(actor.role)) return json(res, 403, { error: 'Administrator access is required.' });
     let pool;
     try {
       pool = getPool();
@@ -485,7 +565,7 @@ async function api(req, res, url) {
   if (url.pathname.startsWith('/api/admissions/admin/')) {
     const actor = session && accounts.find(item => item.id === session.accountId);
     const suppliedToken = String(req.headers['x-admission-admin-token'] || '');
-    if ((!actor || actor.role !== 'admin') && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage applications.' });
+    if ((!actor || !isAdminRole(actor.role)) && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage applications.' });
     if (req.method === 'GET' && url.pathname === '/api/admissions/admin/list') {
       try { return json(res, 200, { applications: await listApplications(true) }); }
       catch (error) { console.error('Admission read failed:', error.message); return json(res, 500, { error: error.message || 'Could not read admissions.' }); }
@@ -598,7 +678,7 @@ async function api(req, res, url) {
   if (dataMatch) {
     const actor = session && accounts.find(item => item.id === session.accountId);
     const suppliedToken = String(req.headers['x-admission-admin-token'] || '');
-    if ((!actor || actor.role !== 'admin') && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage records.' });
+    if ((!actor || !isAdminRole(actor.role)) && (!suppliedToken || !safeEqual(suppliedToken, admissionAdminToken))) return json(res, 403, { error: 'Administrator access is required to manage records.' });
     const [tab, type] = collections[dataMatch[1]], recordId = dataMatch[2] ? cleanText(decodeURIComponent(dataMatch[2]), 160) : '';
     try {
       const all = await sheetsStore.getSheetRecords(tab);

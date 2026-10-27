@@ -8,6 +8,27 @@ function safeEqual(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+function normalizeRole(role) {
+  const r = String(role || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (['admin', 'instituteadmin', 'owner', 'superadmin', 'administrator'].includes(r)) {
+    return 'admin';
+  }
+  if (['teacher', 'staff', 'faculty'].includes(r)) {
+    return 'teacher';
+  }
+  if (['student'].includes(r)) {
+    return 'student';
+  }
+  if (['parent', 'guardian'].includes(r)) {
+    return 'parent';
+  }
+  return String(role || '').trim().toLowerCase();
+}
+
+function isAdminRole(role) {
+  return normalizeRole(role) === 'admin';
+}
+
 function getSession(req) {
   if (!sessionSecret) return null;
   const cookie = req.headers.cookie || '';
@@ -39,5 +60,22 @@ function validCsrfRequest(req, session) {
   return Boolean(origin && allowedOrigins.has(origin) && session?.csrfToken && safeEqual(token, session.csrfToken));
 }
 
-function accountView(account) { return { email: account.email, role: account.role, name: account.name, studentId: account.studentId, mustChangePassword: account.mustChangePassword }; }
-module.exports = { getSession, setSession, accountView, safeEqual, validCsrfRequest };
+function accountView(account) {
+  return {
+    email: account.email,
+    role: normalizeRole(account.role),
+    name: account.name,
+    studentId: account.studentId,
+    mustChangePassword: account.mustChangePassword
+  };
+}
+
+module.exports = {
+  getSession,
+  setSession,
+  accountView,
+  safeEqual,
+  validCsrfRequest,
+  normalizeRole,
+  isAdminRole,
+};

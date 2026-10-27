@@ -68,6 +68,19 @@ async function start() {
   } catch (error) {
     console.warn(`Supabase profile photo bucket is not ready: ${error.message}`);
   }
+  try {
+    const { getPool } = require('./services/postgresStore');
+    const adminCheck = await getPool().query('select count(*)::int as count from public.accounts where role = \'admin\'');
+    const adminCount = adminCheck.rows[0]?.count || 0;
+    if (adminCount === 0) {
+      console.error('⚠️ [CRITICAL HEALTH CHECK] No administrator account found in public.accounts table!');
+      console.error('👉 Run: node scripts/reset-admin-password.js <email> <password> OR npm run create:admin');
+    } else {
+      console.log('Administrator account verified (' + adminCount + ' admin account(s) present).');
+    }
+  } catch (err) {
+    console.warn('Admin accounts health check warning: ' + err.message);
+  }
   const bindHost = process.env.PORT ? '0.0.0.0' : '127.0.0.1';
   const ipv4 = http.createServer(app), ipv6 = http.createServer(app);
   try {

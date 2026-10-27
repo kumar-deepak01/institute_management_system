@@ -6,6 +6,7 @@ const { passwordHash } = require('../security/password');
 const { getPhotoMetadata, deletePhoto } = require('../services/profileRecords');
 const { getPhotoUrls } = require('../services/photoStorage');
 const { queryWithLimit } = require('../services/queryConcurrency');
+const { isAdminRole, normalizeRole } = require('../middleware/auth');
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const receiveImportFile=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024,files:1}}).single('file');
@@ -207,7 +208,6 @@ async function createStudent(client, fields, auditActor) {
   for(const account of [studentAccount,parentAccount].filter(Boolean)) {
     const safeAccount={...account}; delete safeAccount._salt;
     await client.query(`insert into public.accounts(id,email,role,name,student_id,password_hash,password_salt,must_change_password,session_version,record_json) values($1,$2,$3,$4,$5,$6,$7,true,0,$8::jsonb)`,[safeAccount.id,safeAccount.email,safeAccount.role,safeAccount.name,studentId,safeAccount.passwordHash,safeAccount.passwordSalt,JSON.stringify(safeAccount)]);
-    await client.query('insert into public.app_records(source_tab,record_id,record_json) values($1,$2,$3::jsonb)', ['Students',safeAccount.id,JSON.stringify({_type:'account',...safeAccount})]);
   }
   return record;
 }
@@ -239,7 +239,7 @@ async function createStudentFromAdmission(client, application, auditActor) {
 
 async function handleStudentRoute(req,res,url,input,actor) {
   const prefix='/api/admin/students'; if(!url.pathname.startsWith(prefix)) return false;
-  if(!actor || actor.role!=='admin') { res.statusCode=403; res.end(JSON.stringify({error:'Administrator access is required.'})); return true; }
+  if(!actor || !isAdminRole(actor.role)) { res.statusCode=403; res.end(JSON.stringify({error:'Administrator access is required.'})); return true; }
   const send=(status,data,headers={})=>{res.statusCode=status;for(const [key,value] of Object.entries(headers))res.setHeader(key,value);res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(data));};
   const suffix=url.pathname.slice(prefix.length).replace(/^\//,'');
   try {
@@ -307,7 +307,7 @@ async function handleStudentRoute(req,res,url,input,actor) {
         const current=await getPool().query('select record_json from public.students where id=$1',[studentId]);if(!current.rowCount)return send(404,{error:'Student record was not found.'});
         const old=current.rows[0].record_json||{},admissionNumber=f.admissionNumber||old.admissionNumber||old.roll,updated={...old,...f,email:old.email,admissionNumber,roll:admissionNumber};
         const client=await getPool().connect();try{await client.query('begin');await client.query("select pg_advisory_xact_lock(hashtext('student-admission-number'))");const duplicate=await client.query("select 1 from public.students where id<>$1 and (roll=$2 or record_json->>'admissionNumber'=$2) limit 1",[studentId,admissionNumber]);if(duplicate.rowCount){await client.query('rollback');return send(409,{error:'Admission number is already assigned.'});}await client.query(`update public.students set name=$2,phone=$3,batch_id=nullif($4,''),status=$5,roll=$6,record_json=$7::jsonb,updated_at=now() where id=$1`,[studentId,f.name,f.phone,f.batchId,f.status,admissionNumber,JSON.stringify(updated)]);await client.query('update public.app_records set record_json=$3::jsonb,updated_at=now() where source_tab=$1 and record_id=$2',['Students',studentId,JSON.stringify({_type:'app-data',collection:'student',...updated})]);await client.query('commit');invalidateStudentCaches();return send(200,{record:updated});}catch(error){try{await client.query('rollback')}catch{}throw error;}finally{client.release();}
-      }if(!action&&req.method==='DELETE'){const photo=await getPhotoMetadata('students',studentId),client=await getPool().connect();try{await client.query('begin');const accounts=await client.query('select id from public.accounts where student_id=$1 for update',[studentId]);await client.query('delete from public.app_records where source_tab=$1 and record_id=any($2::text[])',['Students',[studentId,...accounts.rows.map(r=>r.id)]]);await client.query('delete from public.accounts where student_id=$1',[studentId]);const removed=await client.query('delete from public.students where id=$1',[studentId]);await client.query('commit');invalidateStudentCaches();if(removed.rowCount&&photo.photo_path){try{await deletePhoto('students',studentId)}catch(error){safeLog('delete student photo',error)}}return removed.rowCount?send(200,{ok:true}):send(404,{error:'Student record was not found.'});}catch(error){await client.query('rollback');throw error;}finally{client.release();}}
+      }if(!action&&req.method==='DELETE'){const photo=await getPhotoMetadata('students',studentId),client=await getPool().connect();try{await client.query('begin');const accounts=await client.query('select id, role from public.accounts where student_id=$1 for update',[studentId]);const accountIds=accounts.rows.filter(r=>r.role!=='admin').map(r=>r.id);await client.query('delete from public.app_records where source_tab=$1 and record_id=any($2::text[])',['Students',[studentId,...accountIds]]);if(accountIds.length)await client.query("delete from public.accounts where id=any($1::text[]) and role<>'admin'",[accountIds]);const removed=await client.query('delete from public.students where id=$1',[studentId]);await client.query('commit');invalidateStudentCaches();if(removed.rowCount&&photo.photo_path){try{await deletePhoto('students',studentId)}catch(error){safeLog('delete student photo',error)}}return removed.rowCount?send(200,{ok:true}):send(404,{error:'Student record was not found.'});}catch(error){await client.query('rollback');throw error;}finally{client.release();}}
     }
     return send(405,{error:'Method not allowed.'});
   } catch(error){if(error.statusCode)return send(error.statusCode,{error:error.message});if(error.code==='LIMIT_FILE_SIZE')return send(413,{error:'Import files must be 5 MB or smaller.'});const result=sendError(suffix||'list',error);return send(result.status,result.body);}
