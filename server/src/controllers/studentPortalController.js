@@ -86,7 +86,7 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
       const sRecord = parseRecord(studentRow.record_json);
       const studentSubjects = Array.isArray(sRecord.subjects) ? sRecord.subjects : [];
       if (!isStudentEnrolledInClass(studentSubjects, classRow.subject_id, classRow.subject_name)) {
-        return json(res, 403, { error: 'Not enrolled in this subject' });
+        return json(res, 403, { error: 'Not enrolled in this subject', demo: true });
       }
 
       const now = new Date();

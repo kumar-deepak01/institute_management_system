@@ -415,14 +415,17 @@ function LiveClasses({
             const subject = String(row.subject_name || row.subjectName || 'Subject').trim();
             const batch = String(row.batch_name || row.batchName || batchName || 'Batch').trim();
             const teacher = String(row.teacher_name || row.teacherName || '').trim();
-            const demoText = `I want to book a demo for ${subject} (${batch})`;
-            const demoUrl = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(demoText)}`;
+            const demoMessage = "Hello, I want to book a demo class for " + subject + " of " + batch + " batch.";
+            const demoUrl = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(demoMessage)}`;
 
             if (!isEnrolled) {
               return (
-                <article
+                <a
                   key={row.id || index}
-                  className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 transition"
+                  href={demoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 transition hover:border-slate-300 hover:bg-slate-100/80 cursor-pointer block text-inherit no-underline"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -438,16 +441,13 @@ function LiveClasses({
                     </p>
                   </div>
                   <div>
-                    <a
-                      href={demoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <span
                       className={`${button} bg-slate-800 hover:bg-slate-900 text-white font-semibold shadow-sm inline-flex items-center justify-center`}
                     >
-                      Book a Demo
-                    </a>
+                      Book Demo
+                    </span>
                   </div>
-                </article>
+                </a>
               );
             }
 
