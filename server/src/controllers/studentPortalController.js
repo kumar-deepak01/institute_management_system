@@ -43,6 +43,16 @@ function ownResultRows(rows, ids) {
     return { id: row.record_id, title: record.title || record.examName || '', subjectId: record.subjectId || '', subjectName: record.subjectName || record.subject || '', score: record.score ?? null, percentage: record.percentage ?? null, marksObtained: record.marksObtained ?? null, totalMarks: record.totalMarks ?? null, grade: record.grade || '', rank: record.rank ?? null, examDate: record.examDate || record.date || '', createdAt: row.created_at };
   });
 }
+function isStudentEnrolledInClass(studentSubjects, classSubjectId, subjectName = '') {
+  if (!classSubjectId) return true;
+  if (!Array.isArray(studentSubjects) || studentSubjects.length === 0) return true;
+  const cleanSubs = studentSubjects.map(s => String(s || '').trim()).filter(Boolean);
+  if (cleanSubs.length === 0) return true;
+  const targetId = String(classSubjectId).trim();
+  if (cleanSubs.includes(targetId)) return true;
+  if (subjectName && cleanSubs.some(s => s.toLowerCase() === String(subjectName).trim().toLowerCase())) return true;
+  return false;
+}
 function query(pool, sql, values = []) {
   return queryWithLimit(() => pool.query(sql, values));
 }
@@ -69,9 +79,13 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
       const studentRow = rowsOf(studentRes)[0];
       if (!studentRow) return json(res, 404, { error: 'Student profile was not found.' });
 
+      if (classRow.batch_id && studentRow.batch_id && String(classRow.batch_id) !== String(studentRow.batch_id)) {
+        return json(res, 403, { error: 'This class belongs to a different batch.' });
+      }
+
       const sRecord = parseRecord(studentRow.record_json);
       const studentSubjects = Array.isArray(sRecord.subjects) ? sRecord.subjects : [];
-      if (classRow.subject_id && !studentSubjects.includes(classRow.subject_id)) {
+      if (!isStudentEnrolledInClass(studentSubjects, classRow.subject_id, classRow.subject_name)) {
         return json(res, 403, { error: 'Not enrolled in this subject' });
       }
 
@@ -81,12 +95,12 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
 
       await query(pool, `insert into public.live_class_joins (id, class_id, student_key, batch_id, subject_id, attendance_date, joined_at, status)
         values (gen_random_uuid()::text, $1, $2, $3, $4, $5::date, $6, 'Present')
-        on conflict (student_key, class_id) do update set joined_at=excluded.joined_at, updated_at=now()`,
+        on conflict (student_key, class_id) do update set joined_at=excluded.joined_at`,
         [classId, studentRow.id, studentRow.batch_id || classRow.batch_id || '', classRow.subject_id || '', todayDate, now.toISOString()]
       );
 
       await query(pool, `insert into public.attendance (id, student_id, student_key, batch_id, attendance_date, status, marked_by, record_json)
-        values (gen_random_uuid()::text, $1, $1, $2, $3::date, 'Present', 'zoom_join', jsonb_build_object('auto', true, 'classId', $4, 'joinedAt', $5))
+        values (gen_random_uuid()::text, $1, $1, $2, $3::date, 'Present', 'zoom_join', jsonb_build_object('auto', true, 'classId', $4::text, 'joinedAt', $5::text))
         on conflict (batch_id, student_key, attendance_date) do update set status='Present', updated_at=now()`,
         [studentRow.id, studentRow.batch_id || classRow.batch_id || '', todayDate, classId, now.toISOString()]
       );
@@ -151,14 +165,21 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
     fees: () => query(pool, `select f.id,f.title,f.total_amount,f.discount_amount,f.fine_amount,f.waived_amount,f.due_date,f.status,f.installment_no,f.installment_count,coalesce(sum(p.amount) filter(where p.reversed_at is null),0)::numeric as amount_paid from public.student_fees f left join public.fee_payments p on p.student_fee_id=f.id and p.student_key=any($1::text[]) where f.student_key=any($1::text[]) group by f.id order by f.due_date nulls last,f.id limit 500`, idsParam),
     downloads: () => query(pool, `select id,title,description,content_type,subject_id,subject_name,external_url,publish_at,expires_at,created_at from public.download_items where lower(status)='published' and (publish_at is null or publish_at<=now()) and (expires_at is null or expires_at>now()) and (subject_id is null or $1='' or subject_id in (select id from public.subjects where course_id=$1)) order by created_at desc limit 500`, [studentCourseId]),
     videos: () => profile.batchId ? query(pool, `select id,title,description,subject_id,chapter,topic,external_url,unlock_at,created_at from public.video_lectures where batch_id=$1 and lower(status)='published' and (unlock_at is null or unlock_at<=now()) order by created_at desc limit 500`, batchParam) : Promise.resolve({ rows: [] }),
-    liveClasses: () => profile.batchId ? query(pool, `select lc.id,lc.title,lc.topic,lc.provider,lc.subject_id,lc.scheduled_at,lc.duration_minutes,lc.meeting_url,lc.status,s.name as subject_name,
+    liveClasses: () => profile.batchId ? query(pool, `select lc.id,lc.title,lc.topic,lc.provider,lc.subject_id,lc.scheduled_at,lc.duration_minutes,lc.meeting_url,lc.status,
+      s.name as subject_name,
+      b.name as batch_name,
+      st.name as teacher_name,
       exists(select 1 from public.live_class_joins j where j.class_id=lc.id and j.student_key=any($2::text[])) as has_joined
-      from public.live_classes lc left join public.subjects s on s.id=lc.subject_id where lc.batch_id=$1 and lower(lc.status)='scheduled' order by lc.scheduled_at limit 200`, [profile.batchId, ids]) : Promise.resolve({ rows: [] }),
+      from public.live_classes lc
+      left join public.subjects s on s.id=lc.subject_id
+      left join public.batches b on b.id=lc.batch_id
+      left join public.staff st on st.id=lc.teacher_key or st.staff_key::text=lc.teacher_key
+      where lc.batch_id=$1 and lower(lc.status)='scheduled' order by lc.scheduled_at limit 200`, [profile.batchId, ids]) : Promise.resolve({ rows: [] }),
     joins: () => query(pool, `select j.id,j.class_id,j.subject_id,j.attendance_date,j.joined_at,j.status,lc.title,lc.scheduled_at,sub.name as subject_name,st.name as teacher_name
       from public.live_class_joins j
       left join public.live_classes lc on lc.id=j.class_id
       left join public.subjects sub on sub.id=j.subject_id
-      left join public.staff st on st.id::text=lc.teacher_id or st.staff_key::text=lc.teacher_id
+      left join public.staff st on st.id::text=lc.teacher_key or st.staff_key::text=lc.teacher_key
       where j.student_key=any($1::text[])
       order by j.joined_at desc limit 50`, idsParam),
     subjects: () => studentCourseId ? query(pool, `select s.id,s.name from public.subjects s where s.course_id=$1 order by s.name limit 200`, [studentCourseId]) : Promise.resolve({ rows: [] }),
@@ -194,6 +215,40 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
   });
   data.subjects = data.subjects.map(row => ({ id: row.id, name: row.name }));
 
+  const demoWhatsAppNumber = String(process.env.DEMO_WHATSAPP_NUMBER || '917304256203').replace(/[^0-9]/g, '') || '917304256203';
+  data.demoWhatsAppNumber = demoWhatsAppNumber;
+
+  data.liveClasses = (Array.isArray(data.liveClasses) ? data.liveClasses : []).map(lc => {
+    const isEnrolled = isStudentEnrolledInClass(profile.subjects, lc.subject_id, lc.subject_name);
+    if (!isEnrolled) {
+      return {
+        id: lc.id,
+        title: lc.title || lc.topic || 'Online Class',
+        subject_name: lc.subject_name || '',
+        batch_name: lc.batch_name || profile.batchName || '',
+        scheduled_at: lc.scheduled_at,
+        teacher_name: lc.teacher_name || 'Faculty',
+        enrolled: false,
+      };
+    }
+    return {
+      id: lc.id,
+      title: lc.title || lc.topic || 'Online Class',
+      topic: lc.topic || '',
+      provider: lc.provider || 'zoom',
+      subject_id: lc.subject_id || '',
+      subject_name: lc.subject_name || '',
+      batch_name: lc.batch_name || profile.batchName || '',
+      scheduled_at: lc.scheduled_at,
+      duration_minutes: lc.duration_minutes,
+      meeting_url: lc.meeting_url || '',
+      status: lc.status || 'scheduled',
+      teacher_name: lc.teacher_name || 'Faculty',
+      has_joined: Boolean(lc.has_joined),
+      enrolled: true,
+    };
+  });
+
   const joinRows = Array.isArray(data.joins) ? data.joins : [];
   data.classLog = joinRows.map(r => ({
     id: r.id,
@@ -225,7 +280,12 @@ async function handleStudentPortalRoute(req, res, url, deps = {}) {
     };
   });
 
-  return json(res, 200, { profile, data, panelErrors: entries.filter(([, , error]) => error).map(([name]) => name) });
+  return json(res, 200, {
+    profile,
+    data,
+    config: { demoWhatsAppNumber },
+    panelErrors: entries.filter(([, , error]) => error).map(([name]) => name)
+  });
 }
 
-module.exports = { handleStudentPortalRoute, attendanceSummary, ownResultRows, safeLog };
+module.exports = { handleStudentPortalRoute, isStudentEnrolledInClass, attendanceSummary, ownResultRows, safeLog };

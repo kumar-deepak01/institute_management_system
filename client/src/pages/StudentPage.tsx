@@ -171,7 +171,7 @@ function StudentPageContent({page,profile,data,search,attendance,attendanceStats
   if(page==='messages')return <Messages />;
   if(page==='notifications')return <Notifications rows={notices} unread={unread} localRead={localRead} onMarkRead={onMarkRead}/>;
   if(page==='profile')return <Profile profile={profile} account={account}/>;
-  if(page==='live-classes')return <LiveClasses rows={getArray(data.liveClasses)} onJoin={onJoin} busyJoinId={busyJoinId}/>;
+  if(page==='live-classes')return <LiveClasses rows={getArray(data.liveClasses)} onJoin={onJoin} busyJoinId={busyJoinId} batchName={profile?.batchName} demoWhatsAppNumber={data?.demoWhatsAppNumber || '917304256203'}/>;
   if(page==='videos')return <ListPage title="Video Lectures" rows={getArray(data.videos)} empty="No videos are available for your batch." fields={['title','chapter','topic','description']} linkField="external_url"/>;
   if(page==='doubts')return <Doubts rows={doubts} subjects={subjects}/>;
   return <Tutor/>;
@@ -393,18 +393,64 @@ function Attendance({
 function LiveClasses({
   rows,
   onJoin,
-  busyJoinId
+  busyJoinId,
+  batchName,
+  demoWhatsAppNumber,
 }: {
   rows: Row[];
   onJoin: (row: Row) => void;
   busyJoinId: string | null;
+  batchName?: string;
+  demoWhatsAppNumber?: string;
 }) {
+  const whatsAppNumber = String(demoWhatsAppNumber || '917304256203').replace(/[^0-9]/g, '') || '917304256203';
+
   return (
     <Section title="Live Classes">
       {rows.length ? (
         <div className="space-y-3">
           {rows.map((row, index) => {
             const isJoining = busyJoinId === String(row.id);
+            const isEnrolled = row.enrolled !== false;
+            const subject = String(row.subject_name || row.subjectName || 'Subject').trim();
+            const batch = String(row.batch_name || row.batchName || batchName || 'Batch').trim();
+            const teacher = String(row.teacher_name || row.teacherName || '').trim();
+            const demoText = `I want to book a demo for ${subject} (${batch})`;
+            const demoUrl = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(demoText)}`;
+
+            if (!isEnrolled) {
+              return (
+                <article
+                  key={row.id || index}
+                  className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 transition"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-bold text-slate-700">
+                        {row.title || row.topic || 'Online Class'}
+                      </h3>
+                      <span className="inline-block rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-bold text-slate-700">
+                        Not Enrolled
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {subject} • {formatDate(row.scheduled_at)}{teacher ? ` • ${teacher}` : ''}
+                    </p>
+                  </div>
+                  <div>
+                    <a
+                      href={demoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${button} bg-slate-800 hover:bg-slate-900 text-white font-semibold shadow-sm inline-flex items-center justify-center`}
+                    >
+                      Book a Demo
+                    </a>
+                  </div>
+                </article>
+              );
+            }
+
             return (
               <article
                 key={row.id || index}
@@ -415,7 +461,7 @@ function LiveClasses({
                     {row.title || row.topic || 'Online Class'}
                   </h3>
                   <p className="mt-1 text-sm text-slate-500">
-                    {row.subject_name || row.subjectName || 'Subject'} • {formatDate(row.scheduled_at)} • {row.provider || 'Zoom'}
+                    {subject} • {formatDate(row.scheduled_at)} • {row.provider || 'Zoom'}
                   </p>
                 </div>
                 <div>
